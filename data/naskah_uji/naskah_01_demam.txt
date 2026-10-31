@@ -1,0 +1,13 @@
+Dokter: Siang Bu, silakan duduk. Ini adik Raka ya, keluhannya apa Bu?
+Ibu: Siang Dok. Ini Raka ket wingi isuk awakke sumer, panas tinggi banget Dok. Terus anaknya sambat sirahne ngelu, badannya lemes, nggak mau main.
+Dokter: Sudah berapa hari panasnya, Bu? Naik turun atau terus-terusan?
+Ibu: Baru dua hari Dok, naik turun. Semalam sempat tiga puluh sembilan koma dua derajat.
+Dokter: Di rumah sudah dikasih obat apa saja Bu? Ada mimisan, gusi berdarah, atau muntah?
+Ibu: Kemarin malam cuma saya kasih kompres demam Dok, belum berani kasih obat minum. Mimisan nggak ada, tadi pagi sempat mual mau muntah pas disuapin bubur.
+Dokter: Batuk pilek ada? Buang air kecilnya bagaimana, masih lancar?
+Ibu: Batuk pilek nggak ada Dok. Pipisnya masih lancar, cuma minumnya agak berkurang.
+Dokter: Sebelumnya Raka pernah sakit seperti ini atau pernah dirawat di rumah sakit?
+Ibu: Belum pernah Dok, baru kali ini panasnya tinggi begini.
+Dokter: Ada alergi obat atau makanan, Bu?
+Ibu: Kalau alergi obat kayaknya nggak ada Dok. Tapi kalau makan udang kadang biduran, gatal-gatal kulitnya.
+Dokter: Baik Bu, saya periksa dulu ya. Suhunya sekarang tiga puluh delapan koma sembilan, berat badannya tujuh belas setengah kilo.

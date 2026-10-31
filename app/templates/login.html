@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:380px;margin:40px auto">
+  <h1>Masuk</h1>
+  {% if error %}<div class="alert bad">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <label>Nama pengguna <input name="username" autocomplete="username" required></label>
+    <label>Kata sandi <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Masuk</button>
+  </form>
+  <p class="muted">Akun demo: dokter, perawat, admin (kata sandi dari DEMO_PASSWORD di .env).</p>
+</div>
+{% endblock %}

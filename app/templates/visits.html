@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Kunjungan Poli Anak</h1>
+<div class="card">
+  <h2>Daftarkan kunjungan</h2>
+  <form method="post" action="/visits" class="row">
+    <label>Pasien
+      <select name="patient_id" required>
+        {% for p in patients %}<option value="{{ p.id }}">{{ p.name }}{% if not p.ihs_number %} (belum ada IHS){% endif %}</option>{% endfor %}
+      </select></label>
+    <label>Dokter
+      <select name="practitioner_id">{% for d in practitioners %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></label>
+    <label>Ruang
+      <select name="location_id">{% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select></label>
+    <div><button type="submit">Daftarkan</button></div>
+  </form>
+</div>
+<div class="card">
+  <table>
+    <tr><th>Kode</th><th>Pasien</th><th>Datang</th><th>Status</th><th>Kirim SATUSEHAT</th><th></th></tr>
+    {% for v in visits %}
+    <tr>
+      <td>{{ v.code }}</td><td>{{ v.patient.name }}</td><td>{{ v.arrived_at|wib }}</td>
+      <td><span class="pill s-{{ v.status }}">{{ v.status }}</span></td>
+      <td>{% if v.latest_submission %}<span class="pill s-{{ v.latest_submission.status }}">{{ v.latest_submission.status }}</span>{% else %}-{% endif %}</td>
+      <td>
+        <a href="/visits/{{ v.id }}">buka</a>
+        {% if v.status in ("draft", "approved") %} · <a href="/visits/{{ v.id }}/review">review</a>{% endif %}
+        {% if v.latest_submission %} · <a href="/visits/{{ v.id }}/status">status</a>{% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="muted">Belum ada kunjungan.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

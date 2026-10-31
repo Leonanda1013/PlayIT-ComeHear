@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Status kirim {{ v.code }} · ComeHear{% endblock %}
+{% block content %}
+<h1>Status kirim SATUSEHAT · {{ v.code }}</h1>
+<p class="muted">Terintegrasi dengan <b>sandbox</b> SATUSEHAT (bukan produksi). Encounter SATUSEHAT: {{ v.satusehat_encounter_id or "-" }}</p>
+{% for sub in v.submissions|reverse %}
+<div class="card">
+  <h2>Pengiriman #{{ sub.id }} <span class="pill s-{{ sub.status }}">{{ sub.status }}</span></h2>
+  <p class="muted">Percobaan {{ sub.attempts }} · dibuat {{ sub.created_at|wib }}{% if sub.sent_at %} · terkirim {{ sub.sent_at|wib }}{% endif %}{% if sub.status == "RETRY_WAIT" %} · coba lagi {{ sub.next_attempt_at|wib }}{% endif %}</p>
+  {% if sub.last_error_text %}<div class="alert {{ 'bad' if sub.status == 'NEEDS_ATTENTION' else 'info' }}">{% if sub.last_error_code %}[{{ sub.last_error_code }}] {% endif %}{{ sub.last_error_text }}</div>{% endif %}
+  {% if sub.status in ("NEEDS_ATTENTION", "RETRY_WAIT") and user.role in ("admin", "dokter") %}
+  <form method="post" action="/submissions/{{ sub.id }}/requeue"><button type="submit" class="secondary">Kirim ulang sekarang</button></form>
+  {% endif %}
+  {% if sub.resources %}
+  <table>
+    <tr><th>#</th><th>Resource</th><th>ID SATUSEHAT</th></tr>
+    {% for r in sub.resources %}<tr><td>{{ r.entry_index }}</td><td>{{ r.resource_type }}</td><td><code>{{ r.resource_id or "-" }}</code></td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  <details><summary class="muted">Bundle yang dikirim ({{ sub.bundle.entry|length }} resource)</summary><pre>{{ sub.bundle|tojson(indent=2) }}</pre></details>
+</div>
+{% else %}<div class="card muted">Belum ada pengiriman. Catatan dikirim setelah dokter menyetujui.</div>{% endfor %}
+{% if v.submissions and v.latest_submission.status in ("QUEUED", "SENDING", "RETRY_WAIT", "RECONCILING") %}
+<script>setTimeout(() => location.reload(), 2500);</script>
+{% endif %}
+{% endblock %}

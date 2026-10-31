@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ v.code }} · ComeHear{% endblock %}
+{% block content %}
+<h1>{{ v.code }} <span class="pill s-{{ v.status }}">{{ v.status }}</span></h1>
+<p class="muted">{{ v.patient.name }} · {{ v.practitioner.name }} · {{ v.location.name }} · datang {{ v.arrived_at|wib }}</p>
+
+{% if not v.consent %}
+<div class="card">
+  <h2>1. Persetujuan perekaman</h2>
+  <p>Percakapan konsultasi akan direkam dan diolah AI hanya untuk menyusun draf catatan medis kunjungan ini.
+     Rekaman suara dihapus setelah dokter menyetujui catatan. Dokter tetap memeriksa dan memutuskan isi catatan.
+     Persetujuan dapat ditarik kapan saja.</p>
+  <form method="post" action="/visits/{{ v.id }}/consent" class="row">
+    <label>Nama pemberi persetujuan <input name="given_by_name" required></label>
+    <label>Hubungan dengan pasien
+      <select name="relation"><option>ibu</option><option>ayah</option><option>wali</option><option>pasien</option></select></label>
+    <label style="flex-basis:100%"><input type="checkbox" name="agree" value="ya" required style="width:auto"> Saya menyetujui perekaman dan pengolahan di atas (versi {{ consent_version }})</label>
+    <div><button type="submit">Simpan persetujuan</button></div>
+  </form>
+</div>
+{% else %}
+<div class="card">
+  <h2>Persetujuan</h2>
+  <p class="muted">Diberikan oleh {{ v.consent.given_by_name }} ({{ v.consent.relation }}) pada {{ v.consent.given_at|wib }}, teks {{ v.consent.text_version }}.</p>
+</div>
+
+{% set locked = v.note and v.note.approved_snapshot %}
+{% if not locked %}
+<div class="card">
+  <h2>2. Rekam konsultasi</h2>
+  <div class="rec" id="rec">
+    <span class="dot"></span>
+    <button id="btn-start" type="button">Mulai rekam</button>
+    <button id="btn-stop" type="button" class="secondary" disabled>Selesai &amp; proses</button>
+    <span id="rec-time" class="muted">00:00</span>
+  </div>
+  <p class="muted">Mikrofon butuh HTTPS atau localhost. Bila perekaman bermasalah, unggah berkas audio:</p>
+  <form id="upload-form" class="row">
+    <label>Berkas audio (webm, ogg, mp3, wav, m4a) <input type="file" name="audio" accept="audio/*" required></label>
+    <div><button type="submit" class="secondary">Unggah &amp; proses</button></div>
+  </form>
+  <details>
+    <summary class="muted">Cadangan demo: tempel transkrip teks</summary>
+    <form method="post" action="/visits/{{ v.id }}/transcript-text">
+      <label>Format per baris: <code>Dokter: ...</code> / <code>Ibu: ...</code>
+        <textarea name="transcript" rows="8" required></textarea></label>
+      <button type="submit" class="secondary">Proses transkrip</button>
+    </form>
+  </details>
+  <div id="progress" class="alert info" style="display:none"></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Sesi scribe</h2>
+  <table>
+    <tr><th>#</th><th>Status</th><th>Waktu proses</th><th>Model</th><th>Audio</th></tr>
+    {% for s in v.scribe_sessions|reverse %}
+    <tr data-session="{{ s.id }}" data-status="{{ s.status }}">
+      <td>{{ s.id }}</td>
+      <td><span class="pill s-{{ s.status }}">{{ s.status }}</span>{% if s.error %}<div class="muted">{{ s.error }}</div>{% endif %}</td>
+      <td>{% if s.timings %}{{ s.timings.get("total_s", "-") }} dtk{% endif %}</td>
+      <td class="muted">{% if s.model_info %}{{ s.model_info.get("asr_model") }} · {{ s.model_info.get("extract_llm") }}{% endif %}</td>
+      <td class="muted">{% if s.audio_deleted_at %}dihapus {{ s.audio_deleted_at|wib }}{% elif s.audio_path %}tersimpan{% else %}teks{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">Belum ada.</td></tr>{% endfor %}
+  </table>
+  {% if v.status in ("draft", "approved") %}<p><a class="btn" href="/visits/{{ v.id }}/review">Buka review dokter</a></p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>window.VISIT_ID = {{ v.id }};</script>
+<script src="/static/recorder.js"></script>
+{% endblock %}

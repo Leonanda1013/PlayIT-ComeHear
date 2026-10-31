@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ComeHear SIM{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">ComeHear</a>
+  {% if user %}
+  <nav>
+    <a href="/">Kunjungan</a>
+    <a href="/patients">Pasien</a>
+    <a href="/dashboard">Dasbor</a>
+  </nav>
+  <span class="who">{{ user.name }} · {{ user.role }} · <a href="/logout">keluar</a></span>
+  {% endif %}
+</header>
+<main>{% block content %}{% endblock %}</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

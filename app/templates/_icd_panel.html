@@ -1,0 +1,24 @@
+{# Usulan ICD-10: disisipkan begitu tahap pengodean selesai. #}
+<div id="icd-panel">
+  {% set chosen = note.diagnoses|map(attribute="code")|list %}
+  {% set primary = note.diagnoses[0].code if note.diagnoses else "" %}
+  {% if ss and ss.icd_suggestions %}
+  <p class="muted">Usulan AI dari anamnesis saja (keyakinan = perkiraan model, bukan akurasi):</p>
+  <table>
+    <tr><th>Pakai</th><th>Primer</th><th>Kode</th><th>Usulan</th></tr>
+    {% for c in ss.icd_suggestions %}
+    <tr>
+      <td><input type="checkbox" name="dx_code" value="{{ c.code }}" style="width:auto" {% if c.code in chosen %}checked{% endif %}></td>
+      <td><input type="radio" name="dx_primary" value="{{ c.code }}" style="width:auto" {% if c.code == primary %}checked{% endif %}></td>
+      <td><b>{{ c.code }}</b></td>
+      <td>{{ c.deskripsi_id }} <span class="muted">({{ c.display }}) · {{ (c.keyakinan * 100)|round|int }}% · {{ c.alasan }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% set ai_codes = ss.icd_suggestions|map(attribute="code")|list if ss and ss.icd_suggestions else [] %}
+  {% for d in note.diagnoses if d.code not in ai_codes %}
+    <p><label><input type="checkbox" name="dx_code" value="{{ d.code }}" checked style="width:auto"> {{ d.code }} {{ d.display }}
+      <input type="radio" name="dx_primary" value="{{ d.code }}" style="width:auto" {% if d.code == primary %}checked{% endif %}> primer</label></p>
+  {% endfor %}
+</div>

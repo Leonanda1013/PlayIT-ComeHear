@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dasbor</h1>
+<div class="grid2">
+  <div class="card">
+    <h2>Pengiriman SATUSEHAT</h2>
+    <table>{% for st, n in by_status.items() %}<tr><td><span class="pill s-{{ st }}">{{ st }}</span></td><td>{{ n }}</td></tr>{% else %}<tr><td class="muted">Belum ada.</td></tr>{% endfor %}</table>
+  </div>
+  <div class="card">
+    <h2>Rasio koreksi dokter (target ≤ 20%)</h2>
+    {% if total_edits %}
+    <p style="font-size:28px;margin:0"><b>{{ (100 * changed / total_edits)|round(1) }}%</b> <span class="muted">({{ changed }} dari {{ total_edits }} isian diubah)</span></p>
+    <table><tr><th>Isian</th><th>Diubah</th></tr>
+      {% for key, n, ch in per_field %}<tr><td>{{ key }}</td><td>{{ ch or 0 }} / {{ n }}</td></tr>{% endfor %}</table>
+    {% else %}<p class="muted">Muncul setelah ada catatan yang disetujui.</p>{% endif %}
+  </div>
+</div>
+{% if attention %}
+<div class="card"><h2>Perlu perhatian</h2>
+  <table>{% for s in attention %}<tr><td><a href="/visits/{{ s.visit_id }}/status">{{ s.visit.code }}</a></td><td>[{{ s.last_error_code }}] {{ s.last_error_text }}</td></tr>{% endfor %}</table>
+</div>
+{% endif %}
+<div class="card">
+  <h2>Waktu proses scribe (20 terakhir)</h2>
+  <table><tr><th>Kunjungan</th><th>ASR</th><th>Pembicara</th><th>Ekstraksi S</th><th>ICD</th><th>Total</th><th>Model</th></tr>
+  {% for s in sessions %}{% set t = s.timings or {} %}
+    <tr><td>{{ s.visit.code }}</td><td>{{ t.get("asr_s") }}</td><td>{{ t.get("speaker_s") }}</td><td>{{ t.get("extract_s") }}</td><td>{{ t.get("icd_s") }}</td><td><b>{{ t.get("total_s") }}</b></td>
+      <td class="muted">{{ (s.model_info or {}).get("asr_model") }} · {{ (s.model_info or {}).get("extract_llm") }}</td></tr>
+  {% endfor %}</table>
+</div>
+{% endblock %}

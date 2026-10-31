@@ -1,0 +1,145 @@
+"""Pipeline ujung ke ujung: audio/teks -> transkrip -> S (+ label pembicara) -> ICD-10 -> draf catatan.
+
+Supaya dokter tidak menunggu:
+1. ASR berjalan selama rekaman (`live_asr`): potongan audio dikirim tiap beberapa detik dan
+   ditranskripsi bertahap, jadi saat tombol Selesai ditekan sisa ASR tinggal beberapa detik.
+2. Label pembicara digabung ke panggilan ekstraksi S (satu putaran LLM, bukan dua).
+3. Kata kunci ICD dicari dari transkrip bersamaan dengan ekstraksi S.
+4. Bagian S disimpan begitu jadi (status "coding"), sebelum usulan ICD selesai.
+"""
+import logging
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+
+from app.config import Settings
+from app.models import AuditLog, ClinicalNote, ScribeSession, utcnow
+from app.scribe import asr
+from app.scribe.extract import extract_subjective, icd_keywords, icd_pick
+from app.scribe.icd import icd_table
+from app.scribe.llm import LLM
+from app.scribe.mock_llm import mock_generate
+from app.scribe.schemas import SUBJECTIVE_FIELDS
+
+log = logging.getLogger("comehear.pipeline")
+
+# ASR (CPU berat) satu per satu agar urutan potongan terjaga; panggilan LLM (I/O) boleh paralel.
+executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scribe")
+llm_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm")
+_live_jobs: dict[int, Future] = {}
+
+
+def _live_state(ss: ScribeSession) -> dict:
+    return dict((ss.model_info or {}).get("live") or {"offset": 0.0, "asr_s": 0.0})
+
+
+def _asr_step(ss: ScribeSession, settings: Settings, final: bool) -> None:
+    state = _live_state(ss)
+    t = time.perf_counter()
+    segments, state["offset"], duration = asr.transcribe_incremental(
+        ss.audio_path, settings, list(ss.transcript or []), state["offset"], final)
+    state["asr_s"] = round(state["asr_s"] + time.perf_counter() - t, 1)
+    ss.transcript = segments
+    ss.model_info = {**(ss.model_info or {}), "live": state, "asr_model": settings.asr_model,
+                     "duration_s": round(duration, 1)}
+
+
+def live_asr(session_factory, session_id: int, settings: Settings) -> None:
+    """Satu putaran ASR bertahap selama rekaman masih berjalan."""
+    with session_factory() as db:
+        ss = db.get(ScribeSession, session_id)
+        if ss is None or ss.status != "recording":
+            return
+        try:
+            _asr_step(ss, settings, final=False)
+            db.commit()
+        except Exception:
+            log.exception("ASR bertahap sesi %s gagal; akan dicoba lagi saat potongan berikutnya", session_id)
+            db.rollback()
+
+
+def submit_live(session_factory, session_id: int, settings: Settings) -> None:
+    job = _live_jobs.get(session_id)
+    if job is None or job.done():  # jangan menumpuk antrean bila ASR belum mengejar
+        _live_jobs[session_id] = executor.submit(live_asr, session_factory, session_id, settings)
+
+
+def run_session(session_factory, session_id: int, settings: Settings, text_transcript: str | None = None):
+    llm = LLM(settings, mock=mock_generate)
+    timings, models = {}, {}
+    with session_factory() as db:
+        ss = db.get(ScribeSession, session_id)
+
+        def step(name: str):
+            ss.status = name
+            db.commit()
+            return time.perf_counter()
+
+        try:
+            t = step("transcribing")
+            if text_transcript:
+                segments = asr.parse_text_transcript(text_transcript)
+                models["asr_model"] = "teks"
+            elif ss.model_info and ss.model_info.get("live"):
+                _asr_step(ss, settings, final=True)  # hanya sisa audio setelah potongan terakhir
+                segments = ss.transcript
+                models.update({k: v for k, v in ss.model_info.items() if k != "live"})
+                timings["asr_live_s"] = ss.model_info["live"]["asr_s"]
+            else:
+                segments, info = asr.transcribe(ss.audio_path, settings)
+                models.update(info)
+            timings["asr_s"] = round(time.perf_counter() - t, 1)
+            if not segments:
+                raise RuntimeError("Transkrip kosong: periksa mikrofon atau berkas audio.")
+            # Salinan baru: ekstraksi menulis label pembicara ke tiap segmen. Mengubah objek JSON yang
+            # sedang dilacak SQLAlchemy di tempat tidak terdeteksi sebagai perubahan, sehingga label hilang.
+            segments = [dict(s) for s in segments]
+
+            t = step("extracting")
+            raw_text = "\n".join(s["text"] for s in segments)
+            kw_future = llm_pool.submit(icd_keywords, raw_text, llm)
+            subjective, models["extract_llm"] = extract_subjective(segments, llm)
+            ss.transcript = segments
+            ss.extraction = subjective
+            timings["extract_s"] = round(time.perf_counter() - t, 1)
+
+            visit = ss.visit
+            note = visit.note or ClinicalNote(visit_id=visit.id)
+            note.subjective = {k: subjective[k]["nilai"] or "" for k in SUBJECTIVE_FIELDS}
+            note.subjective_summary = subjective["rangkuman_s"]
+            note.allergies = subjective["alergi_terstruktur"]
+            db.add(note)
+            visit.status = "draft"
+            t = step("coding")  # S sudah tampil di layar review; ICD menyusul
+
+            try:
+                keywords = kw_future.result()
+            except Exception:
+                log.warning("kata kunci ICD dari transkrip gagal; ulangi dari rangkuman", exc_info=True)
+                keywords = icd_keywords("ANAMNESIS: " + subjective["rangkuman_s"], llm)
+            icd, models["icd"] = icd_pick(subjective["rangkuman_s"], keywords, icd_table(settings), llm)
+            ss.icd_suggestions = icd
+            timings["icd_s"] = round(time.perf_counter() - t, 1)
+
+            ss.status, ss.finished_at = "done", utcnow()
+            timings["total_s"] = round(sum(v for k, v in timings.items() if k in ("asr_s", "extract_s", "icd_s")), 1)
+            ss.timings, ss.model_info = timings, {**(ss.model_info or {}), **models}
+            db.add(AuditLog(action="scribe_done", obj=f"visit:{visit.id}", summary=str(timings)))
+            db.commit()
+        except Exception as e:
+            log.exception("sesi scribe %s gagal", session_id)
+            db.rollback()
+            ss = db.get(ScribeSession, session_id)
+            ss.status, ss.error, ss.timings = "failed", str(e)[:2000], timings
+            if ss.visit.status == "processing":
+                ss.visit.status = "consented"
+            db.commit()
+
+
+def submit(session_factory, session_id: int, settings: Settings, text_transcript: str | None = None):
+    return executor.submit(run_session, session_factory, session_id, settings, text_transcript)
+
+
+def warm_up(settings: Settings) -> None:
+    """Muat model ASR saat server menyala, bukan saat rekaman pertama (±13 detik)."""
+    if settings.asr_model:
+        executor.submit(asr.get_model, settings)

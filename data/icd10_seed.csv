@@ -1,0 +1,43 @@
+CODE,DISPLAY,VERSION
+A01,Typhoid and paratyphoid fevers,ICD10_2010
+A01.0,Typhoid fever,ICD10_2010
+A09,Diarrhoea and gastroenteritis of presumed infectious origin,ICD10_2010
+A90,Dengue fever [classical dengue],ICD10_2010
+A91,Dengue haemorrhagic fever,ICD10_2010
+B01.9,Varicella without complication,ICD10_2010
+B05.9,Measles without complication,ICD10_2010
+B08.4,Enteroviral vesicular stomatitis with exanthem,ICD10_2010
+B34.9,"Viral infection, unspecified",ICD10_2010
+B82.9,"Intestinal parasitism, unspecified",ICD10_2010
+E86,Volume depletion,ICD10_2010
+H10.9,"Conjunctivitis, unspecified",ICD10_2010
+H66.9,"Otitis media, unspecified",ICD10_2010
+J00,Acute nasopharyngitis [common cold],ICD10_2010
+J02.9,"Acute pharyngitis, unspecified",ICD10_2010
+J03.9,"Acute tonsillitis, unspecified",ICD10_2010
+J06,Acute upper respiratory infections of multiple and unspecified sites,ICD10_2010
+J06.9,"Acute upper respiratory infection, unspecified",ICD10_2010
+J18.9,"Pneumonia, unspecified",ICD10_2010
+J20.9,"Acute bronchitis, unspecified",ICD10_2010
+J21.9,"Acute bronchiolitis, unspecified",ICD10_2010
+J45.9,"Asthma, unspecified",ICD10_2010
+K29.7,"Gastritis, unspecified",ICD10_2010
+K52.9,"Noninfective gastroenteritis and colitis, unspecified",ICD10_2010
+K59.0,Constipation,ICD10_2010
+L20.9,"Atopic dermatitis, unspecified",ICD10_2010
+L30.9,"Dermatitis, unspecified",ICD10_2010
+L50.9,"Urticaria, unspecified",ICD10_2010
+N39.0,"Urinary tract infection, site not specified",ICD10_2010
+R05,Cough,ICD10_2010
+R06.0,Dyspnoea,ICD10_2010
+R10.4,Other and unspecified abdominal pain,ICD10_2010
+R11,Nausea and vomiting,ICD10_2010
+R19.7,"Diarrhoea, unspecified",ICD10_2010
+R21,Rash and other nonspecific skin eruption,ICD10_2010
+R50.9,"Fever, unspecified",ICD10_2010
+R51,Headache,ICD10_2010
+R53,Malaise and fatigue,ICD10_2010
+R63.0,Anorexia,ICD10_2010
+T78.1,"Other adverse food reactions, not elsewhere classified",ICD10_2010
+T78.4,"Allergy, unspecified",ICD10_2010
+Z00.1,Routine child health examination,ICD10_2010

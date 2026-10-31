@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Review {{ v.code }} · ComeHear{% endblock %}
+{% block content %}
+<h1>Review dokter · {{ v.code }}</h1>
+<p class="muted">{{ v.patient.name }} · {{ v.practitioner.name }}{% if ss and ss.timings and ss.timings.get("total_s") %} · draf AI siap {{ ss.timings.get("total_s") }} dtk setelah rekaman selesai{% endif %}</p>
+{% for e in errors %}<div class="alert bad">{{ e }}</div>{% endfor %}
+{% if ss and ss.status == "failed" %}<div class="alert bad">Penyusunan draf AI gagal: {{ ss.error }}. Isi S manual atau rekam ulang.</div>{% endif %}
+{% if locked %}<div class="alert info">Catatan sudah disetujui pada {{ note.approved_at|wib }} dan dibekukan. <a href="/visits/{{ v.id }}/status">Lihat status kirim SATUSEHAT</a>.</div>{% endif %}
+
+<div class="grid2">
+  {% include "_transcript.html" %}
+
+  <form method="post" action="/visits/{{ v.id }}/review" id="review-form">
+    <fieldset {% if locked %}disabled{% endif %} style="border:0;padding:0;margin:0">
+
+    <div class="card">
+      <h2>O · Pemeriksaan (diisi perawat/dokter)</h2>
+      <div class="row">
+        {% for key, meta in vitals.items() %}
+        <label>{{ meta[3] }}<input name="vital_{{ key }}" inputmode="decimal" value="{{ note.vitals.get(key, '') }}"></label>
+        {% endfor %}
+      </div>
+      <label>Temuan pemeriksaan fisik <textarea name="exam_text">{{ note.exam_text }}</textarea></label>
+    </div>
+
+    {% if s_ready %}
+      {% include "_s_panel.html" %}
+    {% elif ss and ss.status != "failed" %}
+      <div class="card" id="s-panel" data-session="{{ ss.id }}">
+        <h2>S · Anamnesis</h2>
+        <p class="muted">Disusun otomatis dari rekaman dan akan tampil di sini. Silakan isi pemeriksaan (O) lebih dulu.</p>
+      </div>
+    {% else %}
+      <div class="card" id="s-panel">
+        <input type="hidden" name="s_loaded" value="1">
+        <h2>S · Anamnesis</h2>
+        {% for key, label in fields.items() %}
+        <label>{{ label }}<textarea name="s_{{ key }}" rows="2">{{ note.subjective.get(key, "") }}</textarea></label>
+        {% endfor %}
+        <label>Rangkuman S <textarea name="summary" rows="4">{{ note.subjective_summary }}</textarea></label>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>A · Diagnosis (dokter yang memutuskan)</h2>
+      {% include "_icd_panel.html" %}
+      <label>Tambah kode ICD-10 lain <input name="dx_manual" placeholder="mis. J06.9"></label>
+      <label>Asesmen / rasional klinis (ClinicalImpression.summary) <textarea name="assessment">{{ note.assessment }}</textarea></label>
+    </div>
+
+    <div class="card">
+      <h2>P · Rencana</h2>
+      {% set rx = note.prescriptions[0] if note.prescriptions else {} %}
+      <label><input type="checkbox" name="rx_enabled" value="ya" style="width:auto" {% if rx %}checked{% endif %}> Tambahkan resep</label>
+      <div class="row">
+        <label>Obat <select name="rx_kfa">{% for code, d in drugs.items() %}<option value="{{ code }}">{{ d.display }}</option>{% endfor %}</select></label>
+        <label>Dosis (mL) <input name="rx_dose" inputmode="decimal" value="{{ rx.get('dose_value', '') }}"></label>
+        <label>Tiap (jam) <input name="rx_period" inputmode="decimal" value="{{ rx.get('period', 4) }}"></label>
+        <label>s.d. (jam) <input name="rx_period_max" inputmode="decimal" value="{{ rx.get('period_max', 6) or '' }}"></label>
+        <label>Bila perlu <input name="rx_prn" value="{{ rx.get('as_needed_text', 'demam') or '' }}"></label>
+        <label>Lama (hari) <input name="rx_duration" inputmode="numeric" value="{{ rx.get('duration_days', 3) }}"></label>
+        <label>Jumlah (botol) <input name="rx_qty" inputmode="numeric" value="{{ rx.get('quantity', 1) }}"></label>
+      </div>
+      <label>Aturan pakai untuk pasien <input name="rx_instruction" value="{{ rx.get('patient_instruction', '') }}"></label>
+      <label>Rencana lain / edukasi <textarea name="plan_text">{{ note.plan_text }}</textarea></label>
+    </div>
+
+    <div class="card sticky">
+      <button type="submit" name="action" value="save" class="secondary">Simpan draf</button>
+      {% if user.role == "dokter" %}
+      <button type="submit" name="action" value="approve" id="btn-approve" {% if not s_ready and ss and ss.status != "failed" %}disabled title="Tunggu bagian S tampil"{% endif %}
+        onclick="return confirm('Setujui catatan ini? Isi akan dibekukan dan dikirim ke SATUSEHAT.')">Setujui &amp; kirim ke SATUSEHAT</button>
+      {% else %}<span class="muted">Hanya dokter yang dapat menyetujui.</span>{% endif %}
+    </div>
+    </fieldset>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// Klik isian -> sorot segmen transkrip sumbernya.
+function bindSources(root) {
+  root.querySelectorAll(".field[data-sources]").forEach(f => {
+    f.addEventListener("focusin", () => {
+      document.querySelectorAll(".seg.hl").forEach(s => s.classList.remove("hl"));
+      const ids = f.dataset.sources.split(",").filter(Boolean);
+      ids.forEach(i => document.getElementById("seg-" + i)?.classList.add("hl"));
+      if (ids.length) document.getElementById("seg-" + ids[0])?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  });
+}
+bindSources(document);
+
+// Selama draf AI disusun, dokter mengisi O. Bagian S dan usulan ICD disisipkan tanpa memuat ulang
+// halaman, sehingga isian yang sedang diketik tidak hilang.
+const pending = document.querySelector("#s-panel[data-session]");
+const icdPending = {{ "true" if ss and ss.status not in ("done", "failed") else "false" }};
+if (pending || icdPending) {
+  const swap = (id, html) => {
+    if (!html) return;
+    const t = document.createElement("template");
+    t.innerHTML = html.trim();
+    const node = t.content.firstElementChild;
+    document.getElementById(id).replaceWith(node);
+    bindSources(node);
+  };
+  let sDone = !pending, lastN = -1;
+  const tick = async () => {
+    const r = await fetch("/visits/{{ v.id }}/review/panels");
+    const p = await r.json();
+    if (p.n_segments !== lastN) { swap("transcript-panel", p.transcript_html); lastN = p.n_segments; }
+    if (!sDone && p.s_html) {
+      swap("s-panel", p.s_html); sDone = true;
+      const btn = document.getElementById("btn-approve");
+      if (btn) { btn.disabled = false; btn.title = ""; }
+    }
+    if (p.status === "done") { swap("icd-panel", p.icd_html); return; }
+    if (p.status === "failed") {
+      document.getElementById("s-panel").insertAdjacentHTML("beforeend",
+        `<div class="alert bad">Draf AI gagal: ${p.error || ""}. Muat ulang untuk mengisi S manual.</div>`);
+      return;
+    }
+    setTimeout(tick, 2000);
+  };
+  tick();
+}
+</script>
+{% endblock %}
