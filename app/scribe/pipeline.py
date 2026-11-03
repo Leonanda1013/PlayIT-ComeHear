@@ -28,6 +28,10 @@ llm_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm")
 _live_jobs: dict[int, Future] = {}
 
 
+class Replaced(Exception):
+    """Sesi diganti rekaman ulang di tengah jalan: berhenti tanpa menyentuh catatan."""
+
+
 def _live_state(ss: ScribeSession) -> dict:
     return dict((ss.model_info or {}).get("live") or {"offset": 0.0, "asr_s": 0.0})
 
@@ -70,6 +74,9 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
         ss = db.get(ScribeSession, session_id)
 
         def step(name: str):
+            db.refresh(ss, ["status"])
+            if ss.status == "replaced":
+                raise Replaced()
             ss.status = name
             db.commit()
             return time.perf_counter()
@@ -101,6 +108,9 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             ss.transcript = segments
             ss.extraction = subjective
             timings["extract_s"] = round(time.perf_counter() - t, 1)
+            db.refresh(ss, ["status"])
+            if ss.status == "replaced":
+                raise Replaced()
 
             visit = ss.visit
             note = visit.note or ClinicalNote(visit_id=visit.id)
@@ -125,12 +135,16 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             ss.timings, ss.model_info = timings, {**(ss.model_info or {}), **models}
             db.add(AuditLog(action="scribe_done", obj=f"visit:{visit.id}", summary=str(timings)))
             db.commit()
+        except Replaced:
+            log.info("sesi scribe %s diganti rekaman ulang; hasil dibuang", session_id)
+            db.rollback()
         except Exception as e:
             log.exception("sesi scribe %s gagal", session_id)
             db.rollback()
             ss = db.get(ScribeSession, session_id)
-            ss.status, ss.error, ss.timings = "failed", str(e)[:2000], timings
-            if ss.visit.status == "processing":
+            if ss.status != "replaced":
+                ss.status, ss.error, ss.timings = "failed", str(e)[:2000], timings
+            if ss.status != "replaced" and ss.visit.status == "processing":
                 ss.visit.status = "consented"
             db.commit()
 

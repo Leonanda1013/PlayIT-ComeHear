@@ -11,9 +11,9 @@ from app.config import Settings
 
 # Bias kosakata: istilah klinis dan dialek Jawa Timuran yang sering muncul di poli anak.
 INITIAL_PROMPT = (
-    "Percakapan dokter anak dengan orang tua pasien dalam bahasa Indonesia, kadang bahasa Jawa. "
-    "Demam, panas, sumer, batuk grok-grok, pilek, mual, muntah, mencret, diare, sesak, ngelu, "
-    "lemes, rewel, kejang, mimisan, ruam, biduran, gatal, alergi, parasetamol, sirup, puyer, "
+    "Percakapan dokter dengan pasien atau keluarganya di poli rawat jalan, bahasa Indonesia, kadang Jawa. "
+    "Demam, panas, sumer, batuk, pilek, mual, muntah, diare, sesak, pusing berputar, ngelu, nyeri dada, "
+    "lemes, kejang, mimisan, ruam, biduran, gatal, alergi, tensi, gula darah, parasetamol, amlodipin, "
     "tiga puluh delapan koma lima derajat."
 )
 

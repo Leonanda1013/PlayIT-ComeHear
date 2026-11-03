@@ -29,7 +29,16 @@ cp .env.example .env        # lalu isi
 .venv/Scripts/python -m uvicorn app.main:app --port 8000
 ```
 
-Buka http://localhost:8000, masuk dengan `perawat` / `dokter` / `admin` (kata sandi = `DEMO_PASSWORD`).
+Buka http://localhost:8000 dan masuk dengan email `rian@rumahsakit.id` (dokter), `perawat@rumahsakit.id`,
+atau `admin@rumahsakit.id`; kata sandi = `DEMO_PASSWORD`. Antrean demo hari ini bisa diisi dari tombol
+"Isi antrean demo" di halaman antrean atau Pendaftaran.
+
+Alur layar (mengikuti desain UI): **Antrean** (Panggil → Isi SOAP) → **S** (persetujuan rekam, rekam,
+transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI, plan, Inst/Impl, evaluasi)
+→ **Verifikasi** (konfirmasi dokter, Validasi dan Simpan → kirim SATUSEHAT) → **Resume**.
+
+Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python scripts/upgrade_demo.py`
+(menambah kolom baru tanpa menghapus data, lalu mengisi antrean demo).
 
 | Variabel `.env` | Untuk |
 |---|---|

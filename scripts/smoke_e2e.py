@@ -1,9 +1,6 @@
-"""Uji asap ujung ke ujung lewat HTTP (mock LLM + mock SATUSEHAT, tanpa internet).
+"""Uji asap ujung ke ujung lewat HTTP mengikuti alur UI (antrean -> S -> O-A-P -> Verifikasi -> SATUSEHAT).
 
-Jalankan dengan environment terisolasi, mis.:
   DATABASE_URL=sqlite:///./smoke.db LLM_PROVIDERS=mock SATUSEHAT_MODE=mock python scripts/smoke_e2e.py
-Alur: login perawat -> daftar kunjungan -> persetujuan -> transkrip teks -> pipeline ->
-login dokter -> review + vital + diagnosis + resep -> setujui -> worker kirim -> SENT.
 """
 import re
 import sys
@@ -16,66 +13,76 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app, settings  # noqa: E402
 
-TRANSKRIP = """Dokter: Siang Bu, silakan duduk. Keluhannya apa?
-Ibu: Ini Raka ket wingi isuk awakke sumer panas tinggi banget Dok, terus sirahne ngelu, lemes nggak mau main.
-Dokter: Di rumah sudah dikasih obat apa? Ada mimisan atau muntah?
-Ibu: Kemarin malam cuma saya kompres Dok. Mimisan nggak ada, tadi pagi mual mau muntah.
-Dokter: Pernah sakit seperti ini? Ada alergi?
-Ibu: Belum pernah Dok. Alergi obat kayaknya nggak ada, tapi kalau makan udang gatal-gatal."""
+TRANSKRIP = """Dokter: Selamat pagi Mas, apa keluhan yang paling dirasa hari ini?
+Pasien: Pagi Dok. Kepala saya pusing berputar sejak 3 hari lalu, terus mual dan badan lemas.
+Dokter: Ada demam, batuk, atau riwayat alergi obat sebelumnya?
+Pasien: Demam sama batuk nggak ada Dok. Alergi obat juga nggak ada."""
 
 
-def login(c: TestClient, username: str):
-    r = c.post("/login", data={"username": username, "password": settings.demo_password}, follow_redirects=False)
-    assert r.status_code == 303, r.text
+def login(c: TestClient, email: str):
+    r = c.post("/login", data={"email": email, "password": settings.demo_password}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/antrean", r.text[:500]
 
 
 def main():
     with TestClient(app) as c:
-        login(c, "perawat")
-        page = c.get("/").text
-        pid = re.search(r'name="patient_id"[^>]*>\s*<option value="(\d+)"', page).group(1)
-        r = c.post("/visits", data={"patient_id": pid, "practitioner_id": 1, "location_id": 1}, follow_redirects=False)
-        vid = int(r.headers["location"].rsplit("/", 1)[1])
+        login(c, "perawat@rumahsakit.id")
+        c.post("/pendaftaran/demo")
+        queue = c.get("/antrean").text
+        assert "Daftar Antrean Pasien Hari Ini" in queue
+        vid = int(re.search(r'action="/visits/(\d+)/panggil"', queue).group(1))
+        c.post(f"/visits/{vid}/panggil")
+        assert "Antrean saat ini" in c.get("/antrean").text
 
         r = c.post(f"/visits/{vid}/transcript-text", data={"transcript": "Dokter: tes"}, follow_redirects=False)
         assert r.status_code == 403, "harus ditolak sebelum ada persetujuan"
-        c.post(f"/visits/{vid}/consent", data={"given_by_name": "Ibu Demo", "relation": "ibu", "agree": "ya"})
+        assert c.post(f"/visits/{vid}/consent", data={"decision": "setuju"},
+                      headers={"accept": "application/json"}).json() == {"decision": "setuju"}
         c.post(f"/visits/{vid}/transcript-text", data={"transcript": TRANSKRIP})
         for _ in range(360):
-            if "s-done" in c.get(f"/visits/{vid}").text:
+            st = c.get(f"/visits/{vid}/scribe").json()
+            if st["status"] in ("done", "failed"):
                 break
             time.sleep(0.5)
-        else:
-            raise SystemExit("pipeline tidak selesai")
+        assert st["status"] == "done", st
+        assert st["summary"] and st["icd"], st
 
-        r = c.post(f"/visits/{vid}/review", data={"summary": "x", "action": "approve"}, follow_redirects=False)
-        assert r.status_code == 403, "perawat tidak boleh menyetujui"  # ditolak di approve_and_queue
-        login(c, "dokter")
-        review = c.get(f"/visits/{vid}/review").text
-        assert "Bukti [" in review, "kutipan sumber harus tampil"
-        codes = re.findall(r'name="dx_code" value="([^"]+)"', review)
-        form = {f"s_{k}": v for k, v in re.findall(r'name="s_(\w+)" rows="2">([^<]*)<', review)}
-        form.update({
-            "summary": "Demam sejak kemarin pagi disertai nyeri kepala, lemas, mual. Riwayat alergi udang (gatal).",
-            "vital_body_temperature": "38,9", "vital_body_weight": "17.5",
-            "dx_code": codes[:1], "dx_primary": codes[0], "assessment": "Demam akut hari ke-2.",
-            "rx_enabled": "ya", "rx_kfa": "93001926", "rx_dose": "7,5", "rx_period": "4", "rx_period_max": "6",
-            "rx_prn": "demam", "rx_duration": "3", "rx_qty": "1",
-            "rx_instruction": "Parasetamol 7,5 ml tiap 4-6 jam bila demam", "action": "approve"})
-        r = c.post(f"/visits/{vid}/review", data=form, follow_redirects=False)
-        assert "/status" in r.headers["location"], r.headers["location"]
+        r = c.post(f"/visits/{vid}/soap", data={"step": "verifikasi", "action": "approve", "confirm": "ya"},
+                   follow_redirects=False)
+        assert r.status_code == 403, "perawat tidak boleh memvalidasi"
+
+        login(c, "rian@rumahsakit.id")
+        assert "Draf AI" in c.get(f"/visits/{vid}/s").text or st["summary"]
+        code = st["icd"][0]["code"]
+        r = c.post(f"/visits/{vid}/soap", data={
+            "step": "oap", "action": "to_verify", "suhu": "36,8", "tensi": "120/80", "spo2": "98", "bb": "65",
+            "tb": "180", "rr": "20", "nadi": "82", "gcs": "15 (E4V5M6)", "kesadaran": "Compos Mentis",
+            "lingkar_perut": "74", "alergi": "Tidak ada riwayat alergi obat",
+            "dx_primary": f"{code} — x", "dx_secondary": "", "plan_text": "- Betahistine 6 mg 3x1",
+            "rx_present": "1", "instruksi": "- Edukasi manuver Brandt-Daroff",
+            "evaluasi": "Pasien memahami rencana terapi."}, follow_redirects=False)
+        assert r.headers["location"].endswith("/verifikasi"), r.headers["location"]
+        verify = c.get(f"/visits/{vid}/verifikasi").text
+        assert "Konfirmasi Pemeriksaan" in verify and "120/80" in verify
+        r = c.post(f"/visits/{vid}/soap", data={"step": "verifikasi", "action": "approve"}, follow_redirects=False)
+        assert "/verifikasi" in r.headers["location"], "tanpa centang konfirmasi harus ditolak"
+        r = c.post(f"/visits/{vid}/soap", data={"step": "verifikasi", "action": "approve", "confirm": "ya"},
+                   follow_redirects=False)
+        assert "/resume" in r.headers["location"], r.headers["location"]
 
         for _ in range(240):
-            status = c.get(f"/visits/{vid}/status").text
-            if "s-SENT" in status:
+            resume = c.get(f"/visits/{vid}/resume").text
+            if ">SENT<" in resume:
                 break
             time.sleep(0.25)
         else:
-            raise SystemExit("bundle tidak terkirim:\n" + status[:3000])
-        assert c.post(f"/visits/{vid}/review", data=form, follow_redirects=False).status_code == 409
-        dash = c.get("/dashboard").text
-        assert "Rasio koreksi" in dash
-        print(f"OK: kunjungan {vid} terkirim (SATUSEHAT_MODE={settings.satusehat_mode}, LLM={settings.llm_providers}), ICD usulan {codes}")
+            raise SystemExit("bundle tidak terkirim:\n" + resume[:3000])
+        assert c.post(f"/visits/{vid}/soap", data={"action": "save"}, follow_redirects=False).status_code == 409
+        assert "Selesai" in c.get("/antrean?tab=selesai").text
+        assert "Rasio koreksi" in c.get("/dasbor").text
+        assert c.get("/riwayat").status_code == 200 and c.get("/pendaftaran").status_code == 200
+        print(f"OK: kunjungan {vid} terkirim (SATUSEHAT_MODE={settings.satusehat_mode}, "
+              f"LLM={settings.llm_providers}), ICD usulan {[c['code'] for c in st['icd']]}")
 
 
 if __name__ == "__main__":

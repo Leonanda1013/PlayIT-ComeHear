@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Konsultasi {{ v.patient.name }}{% endblock %}
+{% block crumb %}Rawat Jalan / <em>{{ loc.poli or "" }}</em>{% endblock %}
+
+{% block content %}
+{% import "_soap_macros.html" as m with context %}
+<div class="page-head">
+  <a class="back" href="/antrean" title="Kembali ke antrean">{{ icon("arrow-left") }}</a>
+  <h1>Pemeriksaan Konsultasi &amp; SOAP</h1>
+  <div class="right steps">
+    {% if step == "s" %}<span class="on">Subjektif</span><a href="/visits/{{ v.id }}/oap" data-save>O-A-P</a>
+    {% elif step == "oap" %}<a href="/visits/{{ v.id }}/s" data-save>S</a><span class="on">Objektif - Assesment - Plan</span>
+    {% else %}<span class="on">Verifikasi</span>{% endif %}
+  </div>
+</div>
+
+{% for e in errors %}<div class="alert bad">{{ e }}</div>{% endfor %}
+{% if locked %}<div class="alert ok">SOAP sudah divalidasi pada {{ note.approved_at|wib }}. <a href="/visits/{{ v.id }}/resume">Lihat resume dan status SATUSEHAT</a>.</div>{% endif %}
+{% if failed and not ss %}<div class="alert bad">Penyusunan draf AI gagal: {{ failed.error }}. Rekam ulang atau isi Subjektif secara manual.</div>{% endif %}
+
+<div class="card patient-card">
+  <div class="row">
+    <div><small>Nama Pasien</small><b>{{ v.patient.name }}</b></div>
+    <div><small>No Rawat</small><b>{{ v.code }}</b></div>
+    <div><small>Usia</small><b>{{ v.patient.birth_date|usia }}</b></div>
+    <div><small>Kelamin</small><b>{{ v.patient.gender|kelamin }}</b></div>
+  </div>
+  {% if step == "s" %}
+  <div class="consent">
+    <div>
+      <b>Persetujuan Pasien Rekaman Suara</b>
+      <div class="note">Sesuai UU No. 27/2022 tentang Pelindungan Data Pribadi dan Permenkes No. 24/2022. Audio hanya untuk catatan kunjungan ini dan dihapus setelah validasi.</div>
+    </div>
+    <div id="consent" data-url="/visits/{{ v.id }}/consent">
+      <label class="radio {{ 'checked' if v.consent }}"><input type="radio" name="consent" value="setuju" {% if v.consent %}checked{% endif %} {% if locked %}disabled{% endif %}> Pasien setuju suaranya direkam saat konsultasi berlangsung (AI Scribe)</label>
+      <label class="radio {{ 'checked' if v.status == 'manual' and not v.consent }}"><input type="radio" name="consent" value="menolak" {% if v.status == 'manual' and not v.consent %}checked{% endif %} {% if locked %}disabled{% endif %}> Pasien menolak suaranya direkam (Manual)</label>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if step == "s" %}
+{% set rec_state = "none" %}
+{% if ss %}{% set rec_state = "recording" if ss.status == "recording" else "saved" %}{% endif %}
+<div class="card recorder" id="recorder" style="margin-top:24px"
+     data-visit="{{ v.id }}" data-session="{{ ss.id if ss else '' }}" data-state="{{ rec_state }}"
+     data-consent="{{ 1 if v.consent else 0 }}" data-locked="{{ 1 if locked else 0 }}"
+     data-audio="{{ ('/visits/' ~ v.id ~ '/audio/' ~ ss.id) if ss and ss.audio_path and not ss.audio_deleted_at else '' }}"
+     data-duration="{{ (ss.model_info or {}).get('duration_s', 0) if ss else 0 }}">
+  <span class="status off" id="rec-status"><span class="dot"></span><span id="rec-label">Mikrofon Siap</span></span>
+  <span class="timer"><span id="rec-time">00:00</span><small>menit</small></span>
+  <span class="wave hidden" id="wave"></span>
+  <span class="actions">
+    <select class="input" id="mic-select" title="Pilih mikrofon"><option value="">Mikrofon bawaan</option></select>
+    <button type="button" class="btn ghost hidden" id="btn-play">{{ icon("play") }} <span>Putar Ulang</span></button>
+    <button type="button" class="btn ghost hidden" id="btn-redo">{{ icon("mic") }} Rekam Ulang</button>
+    <button type="button" class="btn" id="btn-start">{{ icon("play") }} Mulai Rekam</button>
+    <button type="button" class="btn hidden" id="btn-stop" style="background:var(--bad);border-color:var(--bad)">{{ icon("square") }} Selesai Rekam</button>
+  </span>
+</div>
+
+<div class="split" style="margin-top:24px">
+  <form class="card panel {{ 'focus' if ss and ss.extraction }}" method="post" action="/visits/{{ v.id }}/soap" id="s-form">
+    <input type="hidden" name="step" value="s">
+    <div class="head">
+      <h2>Subjektif</h2>
+      <span class="pill" id="s-pill">Menunggu Rekaman</span>
+    </div>
+    <div class="placeholder" id="s-empty">
+      <div>
+        <div class="ico">{{ icon("mic-off") }}</div>
+        <b id="s-empty-title">Belum ada rekaman berlangsung</b>
+        <span id="s-empty-text">Klik tombol <em>"Mulai Rekam"</em> untuk<br>mencatat Subjektif secara otomatis.</span>
+      </div>
+    </div>
+    <div class="s-text hidden" id="s-view">{{ note.subjective_summary }}</div>
+    <textarea class="s-text hidden" id="s-edit" name="summary" disabled placeholder="Tulis keluhan utama, riwayat penyakit sekarang, riwayat alergi…">{{ note.subjective_summary }}</textarea>
+    <div class="foot">
+      <button type="button" class="btn ghost" id="btn-s-edit" {% if locked %}disabled{% endif %}>Isi Manual</button>
+      <button type="submit" class="btn" name="action" value="to_oap">Lanjut ke OAP</button>
+    </div>
+  </form>
+  <div class="card panel">
+    <div class="head"><h2>Transkrip Percakapan</h2><span class="pill">Transkrip Sesi</span></div>
+    <div id="chat-wrap" style="display:flex;flex-direction:column;flex:1">{% include "_chat.html" %}</div>
+  </div>
+</div>
+
+{% if not locked %}
+<details class="more">
+  <summary>Opsi lain: unggah berkas audio atau tempel transkrip (cadangan demo)</summary>
+  <div class="grid-2" style="margin-top:12px">
+    <form class="card" id="upload-form">
+      <label class="f">Berkas audio (webm, ogg, mp3, wav, m4a)</label>
+      <input class="input" type="file" name="audio" accept="audio/*" required style="margin:8px 0">
+      <button class="btn ghost">{{ icon("upload") }} Unggah &amp; proses</button>
+    </form>
+    <form class="card" method="post" action="/visits/{{ v.id }}/transcript-text">
+      <label class="f">Transkrip teks, satu kalimat per baris (<code>Dokter: …</code> / <code>Pasien: …</code>)</label>
+      <textarea class="input" name="transcript" rows="4" required style="margin:8px 0"></textarea>
+      <button class="btn ghost">Proses transkrip</button>
+    </form>
+  </div>
+</details>
+{% endif %}
+
+{% elif step == "oap" %}
+<form method="post" action="/visits/{{ v.id }}/soap" id="soap-form" style="margin-top:24px">
+  <input type="hidden" name="step" value="oap">
+  <fieldset {% if locked %}disabled{% endif %} style="border:0;padding:0;margin:0">
+  {{ m.objektif() }}
+  {{ m.asesmen_plan() }}
+  <div class="bottom-actions">
+    <button class="btn ghost" name="action" value="to_s">Kembali ke S</button>
+    <button class="btn" name="action" value="to_verify">Lanjut ke Validasi</button>
+  </div>
+  </fieldset>
+</form>
+
+{% else %}
+<form method="post" action="/visits/{{ v.id }}/soap" id="soap-form" style="margin-top:24px">
+  <input type="hidden" name="step" value="verifikasi">
+  <fieldset {% if locked %}disabled{% endif %} style="border:0;padding:0;margin:0">
+  <div class="card focus">
+    <div class="head" style="display:flex;justify-content:space-between;align-items:center">
+      <h2>Subjektif</h2>
+      {% if ss and ss.status not in ("done",) and not (ss.extraction) %}<span class="pill" id="s-wait">Draf AI belum selesai</span>{% elif ss and ss.extraction %}<span class="pill primary">Draf AI</span>{% endif %}
+    </div>
+    {% set sj = note.subjective or {} %}
+    <div class="subj-grid">
+      <div><span class="cap">Keluhan Utama</span><input class="input" name="s_keluhan_utama" value="{{ sj.get('keluhan_utama', '') }}"></div>
+      <div><span class="cap">Gejala Penyerta</span><input class="input" name="s_riwayat_penyakit_sekarang" value="{{ sj.get('riwayat_penyakit_sekarang', '') }}"></div>
+      <div><span class="cap">Riwayat Alergi</span><input class="input" name="s_riwayat_alergi" value="{{ sj.get('riwayat_alergi', '') }}"></div>
+      <div><span class="cap">Riwayat Penyakit Dahulu</span><input class="input" name="s_riwayat_penyakit_dahulu" value="{{ sj.get('riwayat_penyakit_dahulu', '') }}"></div>
+      <div><span class="cap">Obat / Tindakan Sebelum Datang</span><input class="input" name="s_riwayat_pengobatan" value="{{ sj.get('riwayat_pengobatan', '') }}"></div>
+      <div><span class="cap">Rangkuman Subjektif</span><textarea class="input" name="summary" rows="2">{{ note.subjective_summary }}</textarea></div>
+    </div>
+  </div>
+  <div style="margin-top:24px">{{ m.objektif() }}</div>
+  {{ m.asesmen_plan() }}
+  <div class="card" style="margin-top:24px">
+    <h2>Konfirmasi Pemeriksaan</h2>
+    <div class="sub">Dokter bertanggung jawab atas kebenaran data dan validasi akhir.</div>
+    <label class="confirm" style="margin-top:16px"><input type="checkbox" name="confirm" value="ya"> Saya telah meninjau ringkasan SOAP ini dan menyatakan bahwa data yang tersedia sudah sesuai dengan pemeriksaan pasien.</label>
+  </div>
+  <div class="bottom-actions">
+    <button class="btn ghost" name="action" value="to_oap">Kembali ke OAP</button>
+    {% if user.role == "dokter" %}
+    <button class="btn" name="action" value="approve">Validasi dan Simpan</button>
+    {% else %}<span class="muted small">Hanya dokter yang dapat memvalidasi.</span>{% endif %}
+  </div>
+  </fieldset>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>window.CONSULT = { visit: {{ v.id }}, step: "{{ step }}", locked: {{ "true" if locked else "false" }},
+  pending: {{ "true" if ss and ss.status != "done" else "false" }} };</script>
+<script src="/static/consult.js"></script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Riwayat Pasien{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a class="back" href="/antrean" title="Kembali">{{ icon("arrow-left") }}</a>
+  <h1>Riwayat Pasien</h1>
+</div>
+<div class="card">
+  <div class="toolbar">
+    <span class="muted small">{{ visits|length }} kunjungan terakhir</span>
+    <form class="search input-wrap" method="get">
+      <span class="lead">{{ icon("search") }}</span>
+      <input class="input" name="q" value="{{ q }}" placeholder="Cari nama pasien, nomor RM, atau nomor rawat">
+    </form>
+  </div>
+  <table class="t">
+    <tr><th>Tanggal</th><th>Pasien</th><th>No Rawat</th><th>Diagnosis</th><th>SOAP</th><th>SATUSEHAT</th><th></th></tr>
+    {% for v in visits %}
+    <tr>
+      <td>{{ v.arrived_at|wib }}</td>
+      <td><b>{{ v.patient.name }}</b><div class="small muted">RM {{ v.patient.rm_number or "-" }}</div></td>
+      <td>{{ v.code }}</td>
+      <td>{% set dx = v.note.diagnoses if v.note else [] %}{% if dx %}<b>{{ dx[0].code }}</b> {{ dx[0].display }}{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td>{% if v.note and v.note.approved_snapshot %}<span class="pill ok">Tervalidasi</span>{% elif v.note %}<span class="pill primary">Draf</span>{% else %}<span class="pill">-</span>{% endif %}</td>
+      <td>{% set s = v.latest_submission %}{% if s %}<span class="pill {{ {'SENT': 'ok', 'NEEDS_ATTENTION': 'bad', 'RETRY_WAIT': 'warn'}.get(s.status, 'primary') }}">{{ s.status }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td><a class="btn soft" href="/visits/{{ v.id }}/resume">{{ icon("eye") }} Resume</a></td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="empty">Belum ada kunjungan.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

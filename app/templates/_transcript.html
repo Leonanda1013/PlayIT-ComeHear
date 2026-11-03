@@ -1,8 +1,0 @@
-<div class="card transcript" id="transcript-panel">
-  <h2>Transkrip</h2>
-  {% if ss and ss.transcript %}
-    {% for s in ss.transcript %}
-    <div class="seg {{ s.speaker or '' }}" id="seg-{{ s.i }}"><span class="who">[{{ s.i }}] {{ {"doctor": "DOKTER", "guardian": "ORANG TUA", "patient": "PASIEN"}.get(s.speaker, "") }}</span>{{ s.text }}</div>
-    {% endfor %}
-  {% else %}<p class="muted">Transkrip akan muncul di sini.</p>{% endif %}
-</div>

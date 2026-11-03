@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Antrean Pasien{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a class="back" href="/antrean" title="Muat ulang">{{ icon("arrow-left") }}</a>
+  <h1>Daftar Antrean Pasien Hari Ini</h1>
+  <div class="right">
+    {% if doctor %}<span class="chip-btn">{{ icon("badge") }} <b>DPJP Aktif: {{ user.name }}</b></span>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <nav class="tabs">
+      {% for key, label in [("semua", "Semua Pasien"), ("saat_ini", "Saat Ini"), ("selanjutnya", "Selanjutnya"), ("menunggu", "Menunggu"), ("selesai", "Selesai")] %}
+      <a href="?tab={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}" class="{{ 'active' if tab == key }}">{{ label }} <span class="count">{{ counts[key] }}</span></a>
+      {% endfor %}
+    </nav>
+    <form class="search input-wrap" method="get">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <span class="lead">{{ icon("search") }}</span>
+      <input class="input" name="q" value="{{ q }}" placeholder="Cari nama pasien atau nomor rawat">
+    </form>
+  </div>
+
+  <div class="queue-head"><span>No</span><span>Status</span><span>Nama Pasien</span><span>Draft SOAP</span><span>Aksi</span></div>
+
+  {% for r in rows %}{% set v = r.v %}
+  <div class="queue-row {{ 'current' if r.state == 'saat_ini' }}">
+    <span class="{{ 'small' if r.state != 'saat_ini' }}" style="font-weight:600">{{ loop.index }}</span>
+    <span>
+      {% if r.state == "saat_ini" %}<span class="pill primary lg">Antrean saat ini</span>
+      {% elif r.state == "selanjutnya" %}<span class="pill primary">Pasien Selanjutnya</span>
+      {% elif r.state == "selesai" %}<span class="pill ok">Selesai</span>
+      {% else %}<span class="pill">Menunggu</span>{% endif %}
+    </span>
+    <span>
+      <b>{{ v.patient.name }}</b>
+      <span class="meta">RM: {{ v.patient.rm_number or "-" }} • Rawat: {{ v.code }}</span>
+    </span>
+    <span>
+      {% set label, kind = r.draft %}
+      {% if label == "-" %}<span class="pill">-</span>{% else %}<span class="pill {{ kind }} {{ 'lg' if r.state == 'saat_ini' }}">{{ label }}</span>{% endif %}
+    </span>
+    <span class="aksi">
+      {% if r.state == "saat_ini" %}
+        <form method="post" action="/visits/{{ v.id }}/panggil"><button class="btn ghost block" style="height:38px;font-size:15px">Panggil {{ icon("megaphone") }}</button></form>
+        <a class="btn block" style="height:36px" href="/visits/{{ v.id }}/s">Isi SOAP {{ icon("arrow-right") }}</a>
+      {% elif r.state == "selanjutnya" %}
+        <form method="post" action="/visits/{{ v.id }}/panggil" class="row"><button class="btn outline">Panggil</button></form>
+      {% elif r.state == "menunggu" %}
+        <span class="row"><button class="btn outline" disabled title="Panggil pasien selanjutnya lebih dulu">Panggil</button></span>
+      {% else %}
+        <span class="row">
+          <a class="btn soft" href="/visits/{{ v.id }}/resume">{{ icon("eye") }} Lihat Resume</a>
+          <span class="menu">
+            <button type="button" class="icon-btn" onclick="this.nextElementSibling.classList.toggle('hidden')" aria-label="Menu lain">{{ icon("more") }}</button>
+            <span class="menu-list hidden">
+              <a href="/visits/{{ v.id }}/resume#satusehat">Status kirim SATUSEHAT</a>
+              <a href="/riwayat?q={{ v.patient.rm_number or v.patient.name|urlencode }}">Riwayat pasien</a>
+            </span>
+          </span>
+        </span>
+      {% endif %}
+    </span>
+  </div>
+  {% else %}
+  <div class="empty">
+    {% if q or tab != "semua" %}Tidak ada pasien yang cocok.{% else %}
+    Belum ada pasien di antrean {{ loc.name }} hari ini.
+    <form method="post" action="/pendaftaran/demo" style="margin-top:12px"><button class="btn">Isi antrean demo</button></form>
+    <p class="small">atau daftarkan pasien di menu <a href="/pendaftaran">Pendaftaran</a>.</p>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener("click", e => {
+  if (!e.target.closest(".menu")) document.querySelectorAll(".menu-list").forEach(m => m.classList.add("hidden"));
+});
+</script>
+{% endblock %}

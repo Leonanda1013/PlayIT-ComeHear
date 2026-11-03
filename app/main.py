@@ -3,19 +3,22 @@ import hashlib
 import hmac
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine, get_db
-from app.fhir.codes import DRUGS, VITALS
+from app.fhir.codes import DRUGS
+from app.icons import icon
+from app.migrate import add_missing_columns
 from app.models import (AuditLog, ClinicalNote, Consent, Location, Patient, Practitioner, ReviewEdit,
                         ScribeSession, Submission, User, Visit, as_utc, utcnow)
 from app.satusehat.client import get_client
@@ -23,15 +26,19 @@ from app.scribe import pipeline
 from app.scribe.icd import icd_table
 from app.scribe.schemas import SUBJECTIVE_FIELDS
 from app.security import verify_password
-from app.seed import seed
+from app.seed import next_queue_no, next_rm_number, next_visit_code, seed, seed_today_queue
 from app.services.notes import ApprovalError, approve_and_queue, requeue
+from app.services.soap_form import KESADARAN, apply_form
 from app.sync.worker import OutboxWorker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger("comehear.web")
 settings = get_settings()
 APP_DIR = Path(__file__).parent
 WIB = timezone(timedelta(hours=7))
 CONSENT_VERSION = "v1-2026-10"
+HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 worker: OutboxWorker | None = None
 
 
@@ -39,6 +46,9 @@ worker: OutboxWorker | None = None
 async def lifespan(_app: FastAPI):
     global worker
     Base.metadata.create_all(engine)
+    added = add_missing_columns(engine)
+    if added:
+        log.info("kolom baru ditambahkan: %s", ", ".join(added))
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     with SessionLocal() as db:
         seed(db, settings.demo_password)
@@ -54,14 +64,37 @@ app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=APP_DIR / "templates")
 
 
+# ---------------- filter & helper tampilan ----------------
 def wib(dt) -> str:
     return as_utc(dt).astimezone(WIB).strftime("%d %b %Y %H:%M") if dt else "-"
 
 
-templates.env.filters["wib"] = wib
+def tanggal(dt: datetime | date) -> str:
+    return f"{HARI[dt.weekday()]}, {dt.day} {BULAN[dt.month - 1]} {dt.year}"
 
 
-# ---------------- autentikasi sederhana (cookie bertanda tangan HMAC) ----------------
+def usia(born: date | None) -> str:
+    if not born:
+        return "-"
+    today = datetime.now(WIB).date()
+    months = (today.year - born.year) * 12 + today.month - born.month - (today.day < born.day)
+    return f"{months} bulan" if months < 24 else f"{months // 12} tahun"
+
+
+def kelamin(g: str | None) -> str:
+    return {"male": "Laki - Laki", "female": "Perempuan"}.get(g or "", "-")
+
+
+def loc_label(loc: Location) -> str:
+    poli = (loc.poli or "").removeprefix("Poli ").strip()
+    return f"{poli} {loc.name.split()[-1]}".strip() if poli else loc.name
+
+
+templates.env.filters.update(wib=wib, usia=usia, kelamin=kelamin)
+templates.env.globals.update(icon=icon)
+
+
+# ---------------- autentikasi (cookie bertanda tangan HMAC) ----------------
 def _sign(uid: int) -> str:
     sig = hmac.new(settings.secret_key.encode(), str(uid).encode(), hashlib.sha256).hexdigest()
     return f"{uid}.{sig}"
@@ -69,7 +102,7 @@ def _sign(uid: int) -> str:
 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     raw = request.cookies.get("session", "")
-    uid, _, sig = raw.partition(".")
+    uid = raw.partition(".")[0]
     if uid.isdigit() and hmac.compare_digest(_sign(int(uid)), raw):
         user = db.get(User, int(uid))
         if user:
@@ -85,27 +118,53 @@ def require(*roles: str):
     return dep
 
 
-def render(request: Request, name: str, user: User | None = None, **ctx):
-    return templates.TemplateResponse(request, name, {"user": user, **ctx})
-
-
 def audit(db: Session, user: User | None, action: str, obj: str, summary: str = ""):
     db.add(AuditLog(user_id=user.id if user else None, action=action, obj=obj, summary=summary))
 
 
+def current_location(request: Request, db: Session) -> Location:
+    loc_id = request.cookies.get("loc", "")
+    loc = db.get(Location, int(loc_id)) if loc_id.isdigit() else None
+    return loc or db.scalar(select(Location).order_by(Location.id.desc()))
+
+
+def page(request: Request, db: Session, user: User, name: str, nav: str = "", **ctx):
+    """Render halaman dengan kerangka aplikasi (sidebar, header ruang, tanggal, notifikasi)."""
+    locations = db.scalars(select(Location).order_by(Location.id)).all()
+    for loc in locations:
+        loc.label = loc_label(loc)
+    flashes = []
+    if request.query_params.get("msg"):
+        flashes.append({"text": request.query_params["msg"], "kind": request.query_params.get("kind", "info")})
+    return templates.TemplateResponse(request, name, {
+        "user": user, "nav": nav, "locations": locations, "loc": current_location(request, db),
+        "facility": "RSUD Mitra", "today_label": tanggal(datetime.now(WIB)), "flashes": flashes,
+        "attention_count": db.scalar(select(func.count(Submission.id))
+                                     .where(Submission.status == "NEEDS_ATTENTION")) or 0,
+        **ctx})
+
+
+def redirect(url: str, msg: str | None = None, kind: str = "info") -> RedirectResponse:
+    if msg:
+        url += ("&" if "?" in url else "?") + f"msg={quote(msg)}&kind={kind}"
+    return RedirectResponse(url, status_code=303)
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return render(request, "login.html")
+    return templates.TemplateResponse(request, "login.html", {})
 
 
 @app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.username == username))
+def login(request: Request, email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    ident = email.strip().lower()
+    user = db.scalar(select(User).where(or_(func.lower(User.email) == ident, User.username == ident)))
     if not user or not verify_password(password, user.password_hash):
-        return render(request, "login.html", error="Nama pengguna atau kata sandi salah.")
+        return templates.TemplateResponse(request, "login.html",
+                                          {"error": "Email atau kata sandi salah.", "email": email})
     audit(db, user, "login", f"user:{user.id}")
     db.commit()
-    resp = RedirectResponse("/", status_code=303)
+    resp = RedirectResponse("/antrean", status_code=303)
     resp.set_cookie("session", _sign(user.id), httponly=True, samesite="lax")
     return resp
 
@@ -117,30 +176,78 @@ def logout():
     return resp
 
 
-# ---------------- kunjungan ----------------
-@app.get("/", response_class=HTMLResponse)
-def visits_page(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    visits = db.scalars(select(Visit).order_by(Visit.id.desc()).limit(50)).all()
-    return render(request, "visits.html", user, visits=visits,
-                  patients=db.scalars(select(Patient).order_by(Patient.name)).all(),
-                  practitioners=db.scalars(select(Practitioner)).all(),
-                  locations=db.scalars(select(Location)).all())
+@app.post("/lokasi")
+def set_location(location_id: int = Form(...), next: str = Form("/antrean"), user: User = Depends(current_user)):
+    resp = RedirectResponse(next if next.startswith("/") else "/antrean", status_code=303)
+    resp.set_cookie("loc", str(location_id), samesite="lax")
+    return resp
 
 
-@app.post("/visits")
-def create_visit(patient_id: int = Form(...), practitioner_id: int = Form(...), location_id: int = Form(...),
-                 user: User = Depends(require("perawat", "admin", "dokter")), db: Session = Depends(get_db)):
-    today = datetime.now(WIB).strftime("%Y%m%d")
-    n = db.scalar(select(func.count(Visit.id)).where(Visit.code.like(f"ANAK-{today}-%"))) + 1
-    v = Visit(code=f"ANAK-{today}-{n:03d}", patient_id=patient_id, practitioner_id=practitioner_id,
-              location_id=location_id)
-    db.add(v)
-    db.flush()
-    audit(db, user, "create_visit", f"visit:{v.id}", v.code)
+# ---------------- antrean ----------------
+def today_start_utc() -> datetime:
+    return datetime.now(WIB).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def visit_state(v: Visit) -> str:
+    if v.note and v.note.approved_snapshot:
+        return "selesai"
+    if v.called_at:
+        return "saat_ini"
+    return "menunggu"
+
+
+def draft_label(v: Visit, state: str) -> tuple[str, str]:
+    if state == "selesai":
+        return "Tersimpan", "ok"
+    ss = _review_session(v)
+    if ss and ss.status in ("recording", "queued", "transcribing", "extracting"):
+        return "Menyusun draf", "primary"
+    if (ss and ss.extraction) or (v.note and (v.note.subjective_summary or v.note.vitals)):
+        return "Draf tersimpan", "primary"
+    return ("Belum Ada Draft SOAP", "") if state == "saat_ini" else ("-", "")
+
+
+@app.get("/")
+def home():
+    return RedirectResponse("/antrean", status_code=303)
+
+
+@app.get("/antrean", response_class=HTMLResponse)
+def queue_page(request: Request, tab: str = "semua", q: str = "", user: User = Depends(current_user),
+               db: Session = Depends(get_db)):
+    loc = current_location(request, db)
+    visits = db.scalars(select(Visit).where(Visit.location_id == loc.id, Visit.arrived_at >= today_start_utc())
+                        .order_by(Visit.queue_no, Visit.id)).all()
+    rows = [{"v": v, "state": visit_state(v)} for v in visits]
+    nxt = next((r for r in rows if r["state"] == "menunggu"), None)
+    if nxt:
+        nxt["state"] = "selanjutnya"
+    order = {"saat_ini": 0, "selanjutnya": 1, "menunggu": 2, "selesai": 3}
+    rows.sort(key=lambda r: (order[r["state"]], r["v"].queue_no or 0))
+    for r in rows:
+        r["draft"] = draft_label(r["v"], r["state"])
+    counts = {k: sum(r["state"] == k for r in rows) for k in order}
+    counts["semua"] = len(rows)
+    if tab != "semua":
+        rows = [r for r in rows if r["state"] == tab]
+    if q.strip():
+        ql = q.strip().lower()
+        rows = [r for r in rows if ql in r["v"].patient.name.lower() or ql in (r["v"].patient.rm_number or "").lower()
+                or ql in r["v"].code.lower()]
+    return page(request, db, user, "queue.html", "antrean", rows=rows, counts=counts, tab=tab, q=q,
+                doctor=db.get(Practitioner, user.practitioner_id) if user.practitioner_id else None)
+
+
+@app.post("/visits/{visit_id}/panggil")
+def call_patient(visit_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    v = get_visit(db, visit_id)
+    v.called_at = utcnow()
+    audit(db, user, "panggil", f"visit:{v.id}")
     db.commit()
-    return RedirectResponse(f"/visits/{v.id}", status_code=303)
+    return redirect("/antrean", f"{v.patient.name} dipanggil ke {v.location.name}.")
 
 
+# ---------------- konsultasi: S -> O-A-P -> Verifikasi ----------------
 def get_visit(db: Session, visit_id: int) -> Visit:
     v = db.get(Visit, visit_id)
     if not v:
@@ -148,62 +255,147 @@ def get_visit(db: Session, visit_id: int) -> Visit:
     return v
 
 
-@app.get("/visits/{visit_id}", response_class=HTMLResponse)
-def visit_page(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
-    audit(db, user, "view", f"visit:{v.id}")
+def _ensure_note(db: Session, v: Visit) -> ClinicalNote:
+    if v.note is None:
+        db.add(ClinicalNote(visit_id=v.id))
+        db.commit()
+        db.refresh(v)
+    return v.note
+
+
+def _review_session(v: Visit) -> ScribeSession | None:
+    """Sesi terbaru yang dipakai: abaikan yang gagal atau diganti rekaman ulang."""
+    return next((s for s in reversed(v.scribe_sessions) if s.status not in ("failed", "replaced")), None)
+
+
+def _failed_session(v: Visit) -> ScribeSession | None:
+    last = v.latest_session
+    return last if last and last.status == "failed" else None
+
+
+def _consult(request: Request, db: Session, user: User, v: Visit, step: str, errors: list[str] | None = None):
+    note = _ensure_note(db, v)
+    if not v.called_at:
+        v.called_at = utcnow()
+    audit(db, user, f"view_{step}", f"visit:{v.id}")
     db.commit()
-    return render(request, "visit.html", user, v=v, consent_version=CONSENT_VERSION)
+    rows = icd_table(settings)
+    return page(request, db, user, "consult.html", "antrean", v=v, note=note, step=step, ss=_review_session(v),
+                failed=_failed_session(v), fields=SUBJECTIVE_FIELDS, drugs=DRUGS, kesadaran=KESADARAN,
+                errors=errors or [], locked=bool(note.approved_snapshot), consent_version=CONSENT_VERSION,
+                icd_rows={r.code: r.display for r in rows if any(r.code == d["code"] for d in note.diagnoses)})
+
+
+@app.get("/visits/{visit_id}", response_class=HTMLResponse)
+@app.get("/visits/{visit_id}/s", response_class=HTMLResponse)
+def step_s(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _consult(request, db, user, get_visit(db, visit_id), "s")
+
+
+@app.get("/visits/{visit_id}/oap", response_class=HTMLResponse)
+def step_oap(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _consult(request, db, user, get_visit(db, visit_id), "oap")
+
+
+@app.get("/visits/{visit_id}/verifikasi", response_class=HTMLResponse)
+def step_verify(visit_id: int, request: Request, errors: str | None = None, user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
+    return _consult(request, db, user, get_visit(db, visit_id), "verifikasi",
+                    errors.split("||") if errors else None)
+
+
+@app.post("/visits/{visit_id}/soap")
+async def save_soap(visit_id: int, request: Request, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)):
+    v = get_visit(db, visit_id)
+    note = _ensure_note(db, v)
+    if note.approved_snapshot:
+        raise HTTPException(409, "Catatan sudah divalidasi dan dibekukan.")
+    form = await request.form()
+    action = form.get("action", "save")
+    if action == "approve" and user.role != "dokter":
+        raise HTTPException(403, "Hanya dokter yang dapat memvalidasi catatan klinis.")
+    errors = apply_form(note, v, form, {r.code: r for r in icd_table(settings)})
+    if v.status in ("registered", "consented", "manual", "processing"):
+        v.status = "draft"
+    audit(db, user, "edit_note", f"visit:{v.id}", action)
+    db.commit()
+
+    targets = {"to_s": "s", "to_oap": "oap", "to_verify": "verifikasi", "save": form.get("step", "s")}
+    if errors:
+        return redirect(f"/visits/{v.id}/{form.get('step', 'oap')}", " ".join(errors), "bad")
+    if action != "approve":
+        return redirect(f"/visits/{v.id}/{targets.get(action, 's')}")
+    if form.get("confirm") != "ya":
+        return redirect(f"/visits/{v.id}/verifikasi", "Centang konfirmasi pemeriksaan sebelum validasi.", "bad")
+    try:
+        sub = approve_and_queue(db, v, user, settings)
+    except ApprovalError as e:
+        return redirect(f"/visits/{v.id}/verifikasi?errors={quote('||'.join(e.errors))}")
+    _record_edits(db, v, user)
+    _delete_audio(db, v)
+    if worker:
+        worker.nudge()
+    return redirect(f"/visits/{v.id}/resume", "SOAP tervalidasi dan diantrekan ke SATUSEHAT.", "ok")
 
 
 @app.post("/visits/{visit_id}/consent")
-def give_consent(visit_id: int, given_by_name: str = Form(...), relation: str = Form(...),
-                 agree: str = Form(None), user: User = Depends(current_user), db: Session = Depends(get_db)):
+def set_consent(visit_id: int, decision: str = Form(...), user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
-    if agree != "ya":
-        raise HTTPException(400, "Persetujuan harus dicentang secara eksplisit.")
-    if v.consent is None:
-        db.add(Consent(visit_id=v.id, given_by_name=given_by_name.strip(), relation=relation,
-                       text_version=CONSENT_VERSION, recorded_by=user.id))
-        v.status = "consented"
-        audit(db, user, "consent", f"visit:{v.id}", f"{relation}: {given_by_name}")
-        db.commit()
-    return RedirectResponse(f"/visits/{v.id}", status_code=303)
+    if decision == "setuju":
+        if v.consent is None:
+            db.add(Consent(visit_id=v.id, given_by_name=v.patient.name, relation="pasien",
+                           text_version=CONSENT_VERSION, recorded_by=user.id))
+        if v.status in ("registered", "manual"):
+            v.status = "consented"
+        audit(db, user, "consent", f"visit:{v.id}", "setuju direkam")
+    else:
+        if any(s.status == "recording" for s in v.scribe_sessions):
+            raise HTTPException(409, "Hentikan rekaman lebih dulu.")
+        if v.consent is not None:  # penarikan persetujuan: hentikan pemrosesan (UU PDP Pasal 40)
+            db.delete(v.consent)
+        if v.status in ("registered", "consented"):
+            v.status = "manual"
+        audit(db, user, "consent", f"visit:{v.id}", "menolak direkam (manual)")
+    db.commit()
+    return {"decision": decision}
 
 
-def _start_session(db: Session, v: Visit, user: User, audio_path: str | None) -> ScribeSession:
+def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, status: str = "queued") -> ScribeSession:
     if v.consent is None:
-        raise HTTPException(403, "Belum ada persetujuan pasien/wali: perekaman tidak diizinkan.")
+        raise HTTPException(403, "Belum ada persetujuan pasien: perekaman tidak diizinkan.")
     if v.note and v.note.approved_snapshot:
-        raise HTTPException(409, "Catatan sudah disetujui.")
+        raise HTTPException(409, "Catatan sudah divalidasi.")
+    for old in v.scribe_sessions:  # rekam ulang: sesi lama tidak dipakai lagi
+        if old.status not in ("failed", "replaced"):
+            old.status = "replaced"
     now = utcnow()
     v.started_at = v.started_at or now
-    v.ended_at = now
+    if status != "recording":
+        v.ended_at = now
     v.status = "processing"
-    ss = ScribeSession(visit_id=v.id, audio_path=audio_path, status="queued")
+    ss = ScribeSession(visit_id=v.id, audio_path=audio_path, status=status,
+                       model_info={"live": {"offset": 0.0, "asr_s": 0.0}} if status == "recording" else None)
     db.add(ss)
-    audit(db, user, "scribe_start", f"visit:{v.id}", "audio" if audio_path else "teks")
+    audit(db, user, "scribe_start", f"visit:{v.id}", "rekam langsung" if status == "recording" else
+          ("audio" if audio_path else "teks"))
     db.commit()
     return ss
 
 
 @app.post("/visits/{visit_id}/audio")
-async def upload_audio(visit_id: int, audio: UploadFile = File(...), started_at: str = Form(None),
-                       user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def upload_audio(visit_id: int, audio: UploadFile = File(...), user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     if v.consent is None:
-        raise HTTPException(403, "Belum ada persetujuan pasien/wali.")
+        raise HTTPException(403, "Belum ada persetujuan pasien.")
     suffix = Path(audio.filename or "rekaman.webm").suffix or ".webm"
-    path = settings.audio_dir / f"{v.code}-{int(utcnow().timestamp())}{suffix}"
+    path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}{suffix}"
     path.write_bytes(await audio.read())
-    if started_at:
-        try:
-            v.started_at = v.started_at or datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-        except ValueError:
-            pass
     ss = _start_session(db, v, user, str(path))
     pipeline.submit(SessionLocal, ss.id, settings)
-    return JSONResponse({"session_id": ss.id})
+    return {"session_id": ss.id}
 
 
 _chunk_seq: dict[int, int] = {}
@@ -213,24 +405,13 @@ _chunk_seq: dict[int, int] = {}
 async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = File(...),
                       session_id: int | None = Form(None), user: User = Depends(current_user),
                       db: Session = Depends(get_db)):
-    """Potongan rekaman selama konsultasi berlangsung; ASR berjalan bertahap di latar belakang.
-    Potongan MediaRecorder (timeslice) hanya punya header di potongan pertama, jadi semuanya
-    disambung ke satu berkas webm yang tetap bisa didekode dari awal."""
+    """Potongan rekaman selama konsultasi; ASR berjalan bertahap di latar belakang. Potongan
+    MediaRecorder hanya punya header di potongan pertama, jadi semua disambung ke satu berkas webm."""
     v = get_visit(db, visit_id)
     if seq == 0:
-        if v.consent is None:
-            raise HTTPException(403, "Belum ada persetujuan pasien/wali: perekaman tidak diizinkan.")
-        if v.note and v.note.approved_snapshot:
-            raise HTTPException(409, "Catatan sudah disetujui.")
-        path = settings.audio_dir / f"{v.code}-{int(utcnow().timestamp())}.webm"
+        path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}.webm"
+        ss = _start_session(db, v, user, str(path), status="recording")
         path.write_bytes(b"")
-        v.started_at = v.started_at or utcnow()
-        v.status = "processing"
-        ss = ScribeSession(visit_id=v.id, audio_path=str(path), status="recording",
-                           model_info={"live": {"offset": 0.0, "asr_s": 0.0}})
-        db.add(ss)
-        audit(db, user, "scribe_start", f"visit:{v.id}", "rekam langsung")
-        db.commit()
     else:
         ss = db.get(ScribeSession, session_id) if session_id else None
         if ss is None or ss.visit_id != v.id or ss.status != "recording":
@@ -239,7 +420,7 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
     expected = _chunk_seq.get(ss.id, 0)
     if seq == expected - 1:  # kiriman ulang potongan yang sudah diterima (respons sebelumnya hilang)
         return {"session_id": ss.id}
-    if seq != expected:  # urutan wajib benar agar berkas webm tidak rusak
+    if seq != expected:
         raise HTTPException(409, f"Potongan {seq} tidak berurutan (diharapkan {expected}).")
     with open(ss.audio_path, "ab") as f:
         f.write(await chunk.read())
@@ -259,7 +440,7 @@ def audio_finish(visit_id: int, session_id: int = Form(...), user: User = Depend
     v.ended_at = utcnow()
     db.commit()
     pipeline.submit(SessionLocal, ss.id, settings)
-    return {"session_id": ss.id, "review_url": f"/visits/{v.id}/review"}
+    return {"session_id": ss.id}
 
 
 @app.post("/visits/{visit_id}/transcript-text")
@@ -268,7 +449,17 @@ def upload_text(visit_id: int, transcript: str = Form(...), user: User = Depends
     v = get_visit(db, visit_id)
     ss = _start_session(db, v, user, None)
     pipeline.submit(SessionLocal, ss.id, settings, text_transcript=transcript)
-    return RedirectResponse(f"/visits/{v.id}/review", status_code=303)
+    return redirect(f"/visits/{v.id}/s")
+
+
+@app.get("/visits/{visit_id}/audio/{session_id}")
+def play_audio(visit_id: int, session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ss = db.get(ScribeSession, session_id)
+    if not ss or ss.visit_id != visit_id or not ss.audio_path or ss.audio_deleted_at or not Path(ss.audio_path).exists():
+        raise HTTPException(404, "Rekaman tidak tersedia (sudah dihapus setelah validasi).")
+    audit(db, user, "play_audio", f"visit:{visit_id}")
+    db.commit()
+    return FileResponse(ss.audio_path, media_type="audio/webm")
 
 
 @app.get("/api/sessions/{session_id}")
@@ -279,127 +470,34 @@ def session_status(session_id: int, user: User = Depends(current_user), db: Sess
     return {"status": ss.status, "error": ss.error, "timings": ss.timings, "visit_id": ss.visit_id}
 
 
-# ---------------- review dokter ----------------
-def _ensure_note(db: Session, v: Visit) -> ClinicalNote:
-    if v.note is None:
-        db.add(ClinicalNote(visit_id=v.id))
-        db.commit()
-        db.refresh(v)
-    return v.note
-
-
-@app.get("/visits/{visit_id}/review", response_class=HTMLResponse)
-def review_page(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db),
-                errors: str | None = None):
-    v = get_visit(db, visit_id)
-    note = _ensure_note(db, v)
-    ss = _review_session(v)
-    audit(db, user, "view_review", f"visit:{v.id}")
-    db.commit()
-    return render(request, "review.html", user, v=v, note=note, ss=ss, fields=SUBJECTIVE_FIELDS,
-                  vitals=VITALS, drugs=DRUGS, errors=errors.split("||") if errors else [],
-                  locked=bool(note.approved_snapshot), s_ready=bool(ss and ss.extraction))
-
-
-def _review_session(v: Visit) -> ScribeSession | None:
-    """Sesi terbaru yang belum gagal; bila semuanya gagal, sesi terbaru (agar pesan galat tampil)."""
-    return next((s for s in reversed(v.scribe_sessions) if s.status != "failed"), v.latest_session)
-
-
-@app.get("/visits/{visit_id}/review/panels")
-def review_panels(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Potongan HTML yang disisipkan ke layar review selama draf AI disusun."""
-    v = get_visit(db, visit_id)
+@app.get("/visits/{visit_id}/scribe")
+def scribe_state(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Keadaan draf AI untuk layar konsultasi (dipanggil berkala selama rekaman/penyusunan)."""
     db.expire_all()
     v = get_visit(db, visit_id)
-    ss, note = _review_session(v), _ensure_note(db, v)
-    ctx = {"request": request, "v": v, "ss": ss, "note": note, "fields": SUBJECTIVE_FIELDS}
-    part = lambda name: templates.get_template(name).render(ctx)  # noqa: E731
-    return {"status": ss.status if ss else None, "error": ss.error if ss else None,
-            "n_segments": len(ss.transcript or []) if ss else 0,
-            "transcript_html": part("_transcript.html"),
-            "s_html": part("_s_panel.html") if ss and ss.extraction else None,
-            "icd_html": part("_icd_panel.html") if ss and ss.status == "done" else None}
+    ss, failed = _review_session(v), _failed_session(v)
+    ctx = {"request": request, "v": v, "ss": ss, "icon": icon}
+    return {
+        "status": ss.status if ss else ("failed" if failed else None),
+        "error": failed.error if failed and not ss else None,
+        "n_segments": len(ss.transcript or []) if ss else 0,
+        "chat_html": templates.get_template("_chat.html").render(ctx),
+        "summary": v.note.subjective_summary if v.note and ss and ss.extraction else None,
+        "fields": dict(v.note.subjective or {}) if v.note and ss and ss.extraction else None,
+        "duration_s": (ss.model_info or {}).get("duration_s") if ss else None,
+        "icd": ss.icd_suggestions if ss and ss.status == "done" else None,
+    }
 
 
-@app.post("/visits/{visit_id}/review")
-async def save_review(visit_id: int, request: Request, user: User = Depends(current_user),
-                      db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
-    note = _ensure_note(db, v)
-    if note.approved_snapshot:
-        raise HTTPException(409, "Catatan sudah disetujui dan dibekukan.")
-    form = await request.form()
-    if form.get("action") == "approve" and user.role != "dokter":
-        raise HTTPException(403, "Hanya dokter yang dapat menyetujui catatan klinis.")
-    rows = {r.code: r for r in icd_table(settings)}
-
-    if form.get("s_loaded"):  # bagian S belum tampil: jangan timpa draf AI yang sedang disusun
-        note.subjective = {k: (form.get(f"s_{k}") or "").strip() for k in SUBJECTIVE_FIELDS}
-        note.subjective_summary = (form.get("summary") or "").strip()
-    vitals = {}
-    for key in VITALS:
-        raw = (form.get(f"vital_{key}") or "").replace(",", ".").strip()
-        if raw:
-            try:
-                vitals[key] = float(raw)
-            except ValueError:
-                pass
-    note.vitals = vitals
-    note.exam_text = (form.get("exam_text") or "").strip()
-
-    codes = [c.strip().upper() for c in form.getlist("dx_code") if c.strip()]
-    manual = (form.get("dx_manual") or "").strip().upper()
-    if manual:
-        codes.append(manual)
-    primary = (form.get("dx_primary") or (codes[0] if codes else "")).strip().upper()
-    ai_codes = {s["code"] for s in (v.latest_session.icd_suggestions or [])} if v.latest_session else set()
-    seen, diagnoses, bad = set(), [], []
-    for c in [primary] + codes:
-        if not c or c in seen:
-            continue
-        seen.add(c)
-        if c not in rows:
-            bad.append(f"Kode ICD-10 {c} tidak ada di tabel ICD SATUSEHAT.")
-            continue
-        diagnoses.append({"code": c, "display": rows[c].display, "rank": len(diagnoses) + 1,
-                          "source": "ai" if c in ai_codes else "dokter"})
-    note.diagnoses = diagnoses
-    note.assessment = (form.get("assessment") or "").strip()
-    note.plan_text = (form.get("plan_text") or "").strip()
-
-    prescriptions = []
-    if form.get("rx_enabled") == "ya":
-        try:
-            prescriptions.append({
-                "kfa_code": form.get("rx_kfa"), "dose_value": float(str(form.get("rx_dose")).replace(",", ".")),
-                "frequency": 1, "period": float(form.get("rx_period")),
-                "period_max": float(form.get("rx_period_max")) if form.get("rx_period_max") else None,
-                "period_unit": "h", "as_needed_text": (form.get("rx_prn") or "").strip() or None,
-                "as_needed_fever": "demam" in (form.get("rx_prn") or "").lower(),
-                "duration_days": int(form.get("rx_duration") or 1), "quantity": int(form.get("rx_qty") or 1),
-                "route": "oral", "patient_instruction": (form.get("rx_instruction") or "").strip()})
-        except (TypeError, ValueError):
-            bad.append("Isian resep belum lengkap atau bukan angka.")
-    note.prescriptions = prescriptions
-    v.status = "draft" if v.status in ("processing", "consented", "registered") else v.status
-    audit(db, user, "edit_note", f"visit:{v.id}")
-    db.commit()
-
-    if bad:
-        return RedirectResponse(f"/visits/{v.id}/review?errors={'||'.join(bad)}", status_code=303)
-    if form.get("action") != "approve":
-        return RedirectResponse(f"/visits/{v.id}/review", status_code=303)
-
-    try:
-        sub = approve_and_queue(db, v, user, settings)
-    except ApprovalError as e:
-        return RedirectResponse(f"/visits/{v.id}/review?errors={'||'.join(e.errors)}", status_code=303)
-    _record_edits(db, v, user)
-    _delete_audio(db, v)
-    if worker:
-        worker.nudge()
-    return RedirectResponse(f"/visits/{v.id}/status?sub={sub.id}", status_code=303)
+@app.get("/api/icd")
+def icd_search(q: str = "", user: User = Depends(current_user)):
+    ql = q.strip().lower()
+    if len(ql) < 2:
+        return []
+    rows = icd_table(settings)
+    hits = [r for r in rows if r.code.lower().startswith(ql)] + \
+           [r for r in rows if ql in r.display.lower() and not r.code.lower().startswith(ql)]
+    return [{"code": r.code, "display": r.display} for r in hits[:15]]
 
 
 def _record_edits(db: Session, v: Visit, user: User):
@@ -422,7 +520,7 @@ def _record_edits(db: Session, v: Visit, user: User):
 
 
 def _delete_audio(db: Session, v: Visit):
-    """Retensi: audio dihapus setelah dokter menyetujui catatan (kebijakan 2A-7)."""
+    """Retensi: audio dihapus setelah dokter memvalidasi catatan (kebijakan 2A-7)."""
     for ss in v.scribe_sessions:
         if ss.audio_path and not ss.audio_deleted_at:
             Path(ss.audio_path).unlink(missing_ok=True)
@@ -430,12 +528,13 @@ def _delete_audio(db: Session, v: Visit):
     db.commit()
 
 
-# ---------------- status kirim SATUSEHAT ----------------
+# ---------------- resume & riwayat ----------------
+@app.get("/visits/{visit_id}/resume", response_class=HTMLResponse)
 @app.get("/visits/{visit_id}/status", response_class=HTMLResponse)
-def status_page(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+def resume_page(visit_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     db.expire_all()
-    return render(request, "status.html", user, v=get_visit(db, visit_id))
+    v = get_visit(db, visit_id)
+    return page(request, db, user, "resume.html", "riwayat", v=v, note=v.note, fields=SUBJECTIVE_FIELDS)
 
 
 @app.post("/submissions/{sub_id}/requeue")
@@ -446,10 +545,70 @@ def requeue_submission(sub_id: int, user: User = Depends(require("admin", "dokte
     requeue(db, sub, user)
     if worker:
         worker.nudge()
-    return RedirectResponse(f"/visits/{sub.visit_id}/status", status_code=303)
+    return redirect(f"/visits/{sub.visit_id}/resume", "Dikirim ulang.")
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/riwayat", response_class=HTMLResponse)
+def history_page(request: Request, q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+    stmt = select(Visit).join(Patient).order_by(Visit.arrived_at.desc()).limit(200)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Patient.name.ilike(like), Patient.rm_number.ilike(like), Visit.code.ilike(like)))
+    return page(request, db, user, "history.html", "riwayat", visits=db.scalars(stmt).all(), q=q)
+
+
+# ---------------- administrasi ----------------
+@app.get("/pendaftaran", response_class=HTMLResponse)
+def registration_page(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    queued = set(db.scalars(select(Visit.patient_id).where(Visit.arrived_at >= today_start_utc())))
+    return page(request, db, user, "registration.html", "pendaftaran",
+                patients=db.scalars(select(Patient).order_by(Patient.name)).all(), queued=queued,
+                mode=settings.satusehat_mode)
+
+
+@app.post("/pendaftaran/pasien")
+def add_patient(name: str = Form(...), nik: str = Form(""), birth_date: str = Form(...), gender: str = Form(...),
+                ihs_number: str = Form(""), user: User = Depends(require("admin", "perawat", "dokter")),
+                db: Session = Depends(get_db)):
+    p = Patient(name=name.strip(), rm_number=next_rm_number(db), nik=nik.strip() or None, gender=gender,
+                birth_date=datetime.strptime(birth_date, "%Y-%m-%d").date(), ihs_number=ihs_number.strip() or None)
+    db.add(p)
+    db.flush()
+    msg = f"Pasien {p.name} ditambahkan (RM {p.rm_number})."
+    if p.nik and not p.ihs_number and settings.satusehat_mode != "mock":
+        try:
+            p.ihs_number = get_client(settings).find_patient_by_nik(p.nik)
+            p.ihs_checked_at = utcnow()
+            msg += f" Nomor IHS: {p.ihs_number}." if p.ihs_number else " NIK tidak ditemukan di SATUSEHAT."
+        except Exception as e:
+            msg += f" Pencarian IHS gagal: {e}"
+    audit(db, user, "create_patient", f"patient:{p.id}")
+    db.commit()
+    return redirect("/pendaftaran", msg, "ok")
+
+
+@app.post("/pendaftaran/kunjungan")
+def register_visit(request: Request, patient_id: int = Form(...), user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    loc = current_location(request, db)
+    dr = db.get(Practitioner, user.practitioner_id) if user.practitioner_id else \
+        db.scalar(select(Practitioner).order_by(Practitioner.id.desc()))
+    v = Visit(code=next_visit_code(db), patient_id=patient_id, practitioner_id=dr.id, location_id=loc.id,
+              queue_no=next_queue_no(db, loc.id))
+    db.add(v)
+    db.flush()
+    audit(db, user, "create_visit", f"visit:{v.id}", v.code)
+    db.commit()
+    return redirect("/pendaftaran", f"{v.patient.name} masuk antrean nomor {v.queue_no} ({loc.name}).", "ok")
+
+
+@app.post("/pendaftaran/demo")
+def fill_demo_queue(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = seed_today_queue(db)
+    return redirect("/antrean", f"{n} pasien demo ditambahkan ke antrean hari ini.", "ok")
+
+
+@app.get("/dasbor", response_class=HTMLResponse)
 def dashboard(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     by_status = dict(db.execute(select(Submission.status, func.count()).group_by(Submission.status)).all())
     total_edits = db.scalar(select(func.count(ReviewEdit.id))) or 0
@@ -458,45 +617,18 @@ def dashboard(request: Request, user: User = Depends(current_user), db: Session 
                            .group_by(ReviewEdit.field_key)).all()
     sessions = db.scalars(select(ScribeSession).where(ScribeSession.status == "done")
                           .order_by(ScribeSession.id.desc()).limit(20)).all()
-    return render(request, "dashboard.html", user, by_status=by_status, total_edits=total_edits,
-                  changed=changed, per_field=per_field, sessions=sessions,
-                  attention=db.scalars(select(Submission).where(Submission.status == "NEEDS_ATTENTION")).all())
-
-
-# ---------------- pasien ----------------
-@app.get("/patients", response_class=HTMLResponse)
-def patients_page(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db),
-                  msg: str | None = None):
-    return render(request, "patients.html", user, patients=db.scalars(select(Patient).order_by(Patient.name)).all(),
-                  msg=msg, mode=settings.satusehat_mode)
-
-
-@app.post("/patients")
-def add_patient(name: str = Form(...), nik: str = Form(""), birth_date: str = Form(...), gender: str = Form(...),
-                ihs_number: str = Form(""), user: User = Depends(require("admin", "perawat")),
-                db: Session = Depends(get_db)):
-    p = Patient(name=name.strip(), nik=nik.strip() or None, gender=gender,
-                birth_date=datetime.strptime(birth_date, "%Y-%m-%d").date(), ihs_number=ihs_number.strip() or None)
-    db.add(p)
-    db.flush()
-    msg = "Pasien ditambahkan."
-    if p.nik and not p.ihs_number and settings.satusehat_mode != "mock":
-        try:
-            p.ihs_number = get_client(settings).find_patient_by_nik(p.nik)
-            p.ihs_checked_at = utcnow()
-            msg = f"Nomor IHS ditemukan: {p.ihs_number}" if p.ihs_number else "NIK tidak ditemukan di SATUSEHAT."
-        except Exception as e:
-            msg = f"Pencarian IHS gagal: {e}"
-    audit(db, user, "create_patient", f"patient:{p.id}")
-    db.commit()
-    return RedirectResponse(f"/patients?msg={msg}", status_code=303)
+    return page(request, db, user, "dashboard.html", "dasbor", by_status=by_status, total_edits=total_edits,
+                changed=changed, per_field=per_field, sessions=sessions, mode=settings.satusehat_mode,
+                llm=settings.llm_providers,
+                attention=db.scalars(select(Submission).where(Submission.status == "NEEDS_ATTENTION")).all())
 
 
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, exc: HTTPException):
     if exc.status_code == 303:
         return RedirectResponse(exc.headers["Location"], status_code=303)
-    if request.url.path.startswith("/api/") or request.headers.get("accept", "").startswith("application/json"):
+    if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", "") \
+            or request.method == "POST" and "/audio" in request.url.path:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-    return templates.TemplateResponse(request, "error.html", {"user": None, "code": exc.status_code,
-                                                              "detail": exc.detail}, status_code=exc.status_code)
+    return templates.TemplateResponse(request, "error.html", {"code": exc.status_code, "detail": exc.detail},
+                                      status_code=exc.status_code)

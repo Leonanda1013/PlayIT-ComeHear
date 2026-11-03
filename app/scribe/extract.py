@@ -10,7 +10,7 @@ from app.scribe.schemas import (SUBJECTIVE_FIELDS, ExtractionWithSpeakers, Field
 from app.scribe.textnorm import normalize
 
 SYSTEM = (
-    "Kamu adalah AI medical scribe untuk poli anak di Indonesia. Kamu hanya menyusun draf dari "
+    "Kamu adalah AI medical scribe untuk poli rawat jalan di Indonesia. Kamu hanya menyusun draf dari "
     "transkrip; dokter yang memeriksa dan memutuskan. Jangan pernah menambah informasi yang tidak "
     "diucapkan. Transkrip bisa bercampur bahasa Jawa (mis. 'sumer/panas' = demam, 'ngelu' = pusing/nyeri "
     "kepala, 'mencret' = diare, 'ket wingi' = sejak kemarin, 'isuk' = pagi, 'lemes' = lemas)."
@@ -46,7 +46,7 @@ def extract_subjective(segments: list[dict], llm: LLM) -> tuple[dict, str]:
     need_speakers = not all(s.get("speaker") for s in segments)
     speaker_rule = (
         "9. Isi `pembicara` untuk SETIAP indeks: doctor (bertanya, memeriksa, menjelaskan), guardian "
-        "(orang tua/pendamping menjawab tentang anak), patient (pasien sendiri). Tentukan dulu peran "
+        "(orang tua/keluarga/pendamping yang menjawab untuk pasien), patient (pasien sendiri). Tentukan dulu peran "
         "ini, lalu pakai untuk menyusun anamnesis.\n" if need_speakers else "")
     prompt = (
         "Susun bagian SUBJECTIVE (anamnesis) SOAP dari transkrip berikut. Abaikan pemeriksaan fisik, "
@@ -54,7 +54,7 @@ def extract_subjective(segments: list[dict], llm: LLM) -> tuple[dict, str]:
         "Aturan:\n"
         "1. Setiap isian wajib menyertakan source_ids (indeks [i]) dan kutipan persis dari segmen itu.\n"
         "2. Tidak dibahas -> nilai null, source_ids [], kutipan null, status tidak_ditemukan.\n"
-        "3. Orang tua ragu ('kayaknya', 'lupa', 'mungkin') -> status ambigu dan isi alasan_ambigu.\n"
+        "3. Pasien/pendamping ragu ('kayaknya', 'lupa', 'mungkin') -> status ambigu dan isi alasan_ambigu.\n"
         "4. Disebut jelas -> status jelas.\n"
         "5. Tulis nilai dalam bahasa Indonesia baku; terjemahkan istilah Jawa. Sertakan durasi bila disebut.\n"
         "6. Jangan menyebut nama pasien di rangkuman_s.\n"

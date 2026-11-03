@@ -19,7 +19,7 @@ def test_bundle_matches_proven_sandbox_shape(visit_with_note, settings):
     enc = b["entry"][0]["resource"]
     assert enc["status"] == "finished"
     assert [h["status"] for h in enc["statusHistory"]] == ["arrived", "in-progress", "finished"]
-    assert enc["serviceType"]["coding"][0]["code"] == "394537008"
+    assert enc["serviceType"]["coding"][0]["code"] == "419192003"  # Internal medicine, terbukti di sandbox
     assert enc["identifier"][0]["value"] == "ANAK-20261028-001"
     assert enc["diagnosis"][0]["rank"] == 1
     assert enc["diagnosis"][0]["condition"]["reference"] == b["entry"][1]["fullUrl"]

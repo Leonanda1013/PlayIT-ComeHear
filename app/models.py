@@ -37,6 +37,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(120))
     role: Mapped[str] = mapped_column(String(20))  # dokter | perawat | admin
     password_hash: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(120))
     practitioner_id: Mapped[int | None] = mapped_column(ForeignKey("practitioners.id"))
     practitioner: Mapped[Practitioner | None] = relationship()
 
@@ -45,6 +46,7 @@ class Patient(Base):
     __tablename__ = "patients"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
+    rm_number: Mapped[str | None] = mapped_column(String(20))  # nomor rekam medis fasilitas
     nik: Mapped[str | None] = mapped_column(String(16))
     birth_date: Mapped[date | None] = mapped_column(Date)
     gender: Mapped[str | None] = mapped_column(String(10))  # male | female
@@ -56,7 +58,8 @@ class Patient(Base):
 class Location(Base):
     __tablename__ = "locations"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120))
+    name: Mapped[str] = mapped_column(String(120))          # mis. "Bilik Konsultasi 03"
+    poli: Mapped[str | None] = mapped_column(String(120))   # mis. "Poli Penyakit Dalam"
     satusehat_location_id: Mapped[str | None] = mapped_column(String(64))
     service_type_code: Mapped[str] = mapped_column(String(32), default="394537008")
     service_type_display: Mapped[str] = mapped_column(String(80), default="Pediatrics")
@@ -70,7 +73,9 @@ class Visit(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"))
     practitioner_id: Mapped[int] = mapped_column(ForeignKey("practitioners.id"))
     location_id: Mapped[int] = mapped_column(ForeignKey("locations.id"))
-    # registered -> consented -> processing -> draft -> approved
+    queue_no: Mapped[int | None] = mapped_column(Integer)
+    called_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # registered -> consented | manual -> processing -> draft -> approved
     status: Mapped[str] = mapped_column(String(20), default="registered")
     arrived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -142,6 +147,9 @@ class ClinicalNote(Base):
     assessment: Mapped[str] = mapped_column(Text, default="")
     prescriptions: Mapped[list] = mapped_column(JSON, default=list)
     plan_text: Mapped[str] = mapped_column(Text, default="")
+    # Isian layar O-A-P yang tidak dikirim ke SATUSEHAT di MVP: gcs, kesadaran, lingkar_perut,
+    # alergi, instruksi (Inst/Impl), evaluasi.
+    extra: Mapped[dict | None] = mapped_column(JSON, default=dict)
     # Snapshot beku saat disetujui; bundle selalu dibangun dari sini.
     approved_snapshot: Mapped[dict | None] = mapped_column(JSON)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
