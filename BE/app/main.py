@@ -564,11 +564,13 @@ async def save_soap(visit_id: int, request: Request, user: User = Depends(curren
     
     _record_edits(db, v, user)
     _delete_audio(db, v)
+    nxt = _advance_queue(db, v, user)
     if worker:
         worker.nudge()
     return {
         "status": "ok",
         "action": "approved",
+        "next_visit_id": nxt.id if nxt else None,
         "visit_id": v.id,
         "submission_id": sub.id,
         "message": "SOAP tervalidasi dan diantrekan ke SATUSEHAT."
@@ -743,6 +745,25 @@ def icd_search(q: str = "", user: User = Depends(current_user)):
            [r for r in rows if ql in r.display.lower() and not r.code.lower().startswith(ql)]
     return [{"code": r.code, "display": r.display} for r in hits[:15]]
 
+
+
+def _advance_queue(db: Session, done: Visit, user: User) -> Visit | None:
+    """Setelah SOAP divalidasi, pasien menunggu berikutnya otomatis menjadi "Antrean saat ini".
+
+    Tidak mengubah apa pun bila dokter sudah memanggil pasien lain lebih dulu.
+    """
+    visits = db.scalars(select(Visit).where(Visit.location_id == done.location_id, Visit.arrived_at >= today_start_utc())
+                        .options(joinedload(Visit.note)).order_by(Visit.queue_no, Visit.id)).unique().all()
+    pending = [o for o in visits if o.id != done.id and not (o.note and o.note.approved_snapshot)]
+    if any(o.called_at for o in pending):
+        return None
+    after = [o for o in pending if (o.queue_no or 0) > (done.queue_no or 0)]
+    nxt = (after or pending or [None])[0]
+    if nxt:
+        nxt.called_at = utcnow()
+        audit(db, user, "panggil_otomatis", f"visit:{nxt.id}", f"setelah visit:{done.id} selesai")
+        db.commit()
+    return nxt
 
 def _record_edits(db: Session, v: Visit, user: User):
     ss = next((s for s in reversed(v.scribe_sessions) if s.status == "done"), None)

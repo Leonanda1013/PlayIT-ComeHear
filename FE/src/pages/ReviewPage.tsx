@@ -6,7 +6,8 @@ import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { SoapSummary } from '@/components/SoapSummary'
 import { btn, Notice } from '@/components/ui/kit'
 import { saveSoap } from '@/lib/clinical'
-import type { Consultation } from '@/lib/types'
+import { applyFinish, QUEUE_KEY } from '@/lib/queue'
+import type { Consultation, QueueResponse } from '@/lib/types'
 
 export function ReviewPage({ data }: { data: Consultation }) {
   const id = data.visit.id
@@ -28,7 +29,9 @@ export function ReviewPage({ data }: { data: Consultation }) {
     setBusy(true); setError('')
     try {
       await saveSoap(id, { step: 'verifikasi', action: 'approve', confirm: 'ya' })
-      await Promise.all([queryClient.invalidateQueries({ queryKey: ['consultation', id] }), queryClient.invalidateQueries({ queryKey: ['queue'] })])
+      // Antrean langsung diperbarui: pasien ini "selesai", pasien menunggu berikutnya menjadi "saat ini".
+      queryClient.setQueryData<QueueResponse>(QUEUE_KEY, (prev) => prev && { ...prev, rows: applyFinish(prev.rows, id) })
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['consultation', id] }), queryClient.invalidateQueries({ queryKey: QUEUE_KEY })])
       navigate(`/kunjungan/${id}/resume`, { replace: true })
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'SOAP belum berhasil disimpan.') }
     finally { setBusy(false) }
