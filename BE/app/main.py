@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import Integer, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -922,8 +922,9 @@ def dashboard(user: User = Depends(current_user), db: Session = Depends(get_db))
     changed = db.scalar(select(func.count(ReviewEdit.id)).where(ReviewEdit.changed)) or 0
     correction_ratio = (changed / total_edits) if total_edits > 0 else 0.0
     per_field = [
-        {"field": row[0], "count": row[1], "changed": row[2] or 0}
-        for row in db.execute(select(ReviewEdit.field_key, func.count(), func.sum(ReviewEdit.changed))
+        {"field": row[0], "count": row[1], "changed": int(row[2] or 0)}
+        for row in db.execute(select(ReviewEdit.field_key, func.count(),
+                                     func.sum(func.cast(ReviewEdit.changed, Integer)))
                               .group_by(ReviewEdit.field_key)).all()
     ]
     sessions = db.scalars(select(ScribeSession).where(ScribeSession.status == "done")
