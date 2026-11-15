@@ -426,6 +426,7 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "subjective": note.subjective or {},
             "subjective_summary": note.subjective_summary or "",
             "vitals": note.vitals or {},
+            "exam_text": note.exam_text or "",
             "diagnoses": note.diagnoses or [],
             "plan_text": note.plan_text or "",
             "prescriptions": note.prescriptions or [],
@@ -744,6 +745,7 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
     sub = v.latest_submission
     return {
         "status": "ok",
+        "mode": settings.satusehat_mode,
         "visit": {
             "id": v.id,
             "code": v.code,
@@ -757,6 +759,7 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
             "subjective_summary": v.note.subjective_summary if v.note else "",
             "subjective": v.note.subjective if v.note else {},
             "vitals": v.note.vitals if v.note else {},
+            "exam_text": v.note.exam_text if v.note else "",
             "diagnoses": v.note.diagnoses if v.note else [],
             "plan_text": v.note.plan_text if v.note else "",
             "prescriptions": v.note.prescriptions if v.note else [],
