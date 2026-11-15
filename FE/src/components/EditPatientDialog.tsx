@@ -70,7 +70,9 @@ export function EditPatientDialog({
 
     const errs: Partial<Record<keyof UpdatePatientData, string>> = {}
     if (!form.name.trim()) errs.name = 'Nama lengkap wajib diisi.'
-    if (form.nik && !/^\d{16}$/.test(form.nik.trim())) {
+    if (!form.nik?.trim()) {
+      errs.nik = 'NIK wajib diisi.'
+    } else if (!/^\d{16}$/.test(form.nik.trim())) {
       errs.nik = 'NIK harus berupa 16 digit angka.'
     }
     if (!form.birth_date) errs.birth_date = 'Tanggal lahir wajib dipilih.'
@@ -136,7 +138,7 @@ export function EditPatientDialog({
           </div>
 
           <div>
-            <Label htmlFor="edit-nik">NIK (16 Digit)</Label>
+            <Label htmlFor="edit-nik" required>NIK (16 Digit)</Label>
             <input
               id="edit-nik"
               inputMode="numeric"

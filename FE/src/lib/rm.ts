@@ -25,7 +25,7 @@ export const createPatient = (data: NewPatient) =>
 
 export type UpdatePatientData = {
   name: string
-  nik?: string
+  nik: string
   birth_date: string
   gender: string
   phone?: string
