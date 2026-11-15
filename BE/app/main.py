@@ -746,6 +746,118 @@ def icd_search(q: str = "", user: User = Depends(current_user)):
     return [{"code": r.code, "display": r.display} for r in hits[:15]]
 
 
+@app.get("/api/kfa")
+@app.get("/api/backend/kfa")
+def kfa_search(q: str = "", user: User = Depends(current_user)):
+    """Mencari obat KFA terdaftar untuk peresepan terstruktur SATUSEHAT."""
+    ql = q.strip().lower()
+    hits = []
+    for code, meta in DRUGS.items():
+        display = meta.get("display", "")
+        ing = meta.get("ingredient_display", "")
+        if not ql or ql in code.lower() or ql in display.lower() or ql in ing.lower():
+            hits.append({
+                "code": code,
+                "display": display,
+                "form": meta.get("form_display", ""),
+                "dose_unit": meta.get("dose_unit", "tablet"),
+                "proven": meta.get("proven", True),
+            })
+    return hits
+
+
+@app.get("/api/clinic")
+@app.get("/api/backend/clinic")
+def clinic_info():
+    """Mengembalikan informasi identitas faskes / profil klinik."""
+    return {
+        "name": settings.clinic_name,
+        "serviceType": settings.clinic_service_type,
+        "address": settings.clinic_address,
+        "phone": settings.clinic_phone,
+        "email": settings.clinic_email,
+        "licenseNumber": settings.clinic_license,
+        "faskesCode": settings.clinic_faskes_code,
+    }
+
+
+@app.get("/api/notifikasi")
+@app.get("/api/backend/notifikasi")
+def notifications_list(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Daftar notifikasi aktif berdasarkan peran pengguna."""
+    items = []
+
+    # 1. SATUSEHAT Gagal / Perlu Perhatian
+    failed_subs = db.scalars(
+        select(Submission)
+        .where(Submission.status == "NEEDS_ATTENTION")
+        .order_by(Submission.id.desc())
+        .limit(5)
+    ).all()
+    for s in failed_subs:
+        p_name = s.visit.patient.name if s.visit and s.visit.patient else "Pasien"
+        err = s.last_error_text or "Gagal kirim ke SATUSEHAT"
+        items.append({
+            "id": f"sub-{s.id}",
+            "type": "satusehat_error",
+            "severity": "danger",
+            "title": f"SATUSEHAT: {p_name}",
+            "message": err[:90] + ("..." if len(err) > 90 else ""),
+            "created_at": s.created_at.isoformat() if s.created_at else utcnow().isoformat(),
+            "link": "/rm/satusehat" if user.role != "dokter" else f"/kunjungan/{s.visit_id}/resume",
+        })
+
+    # 2. Pasien Terjadwal Hari Ini Belum Konfirmasi Kedatangan (untuk Petugas RM)
+    if user.role != "dokter":
+        unconfirmed = db.scalars(
+            select(Visit)
+            .where(Visit.arrived_at >= today_start_utc(), Visit.confirmed_at.is_(None))
+            .order_by(Visit.id.desc())
+            .limit(5)
+        ).all()
+        for v in unconfirmed:
+            p_name = v.patient.name if v.patient else "Pasien"
+            items.append({
+                "id": f"visit-unconfirmed-{v.id}",
+                "type": "patient_terjadwal",
+                "severity": "warning",
+                "title": "Perlu Konfirmasi Kedatangan",
+                "message": f"{p_name} ({v.patient.rm_number or 'RM-'}) terjadwal hari ini.",
+                "created_at": v.arrived_at.isoformat() if v.arrived_at else utcnow().isoformat(),
+                "link": "/rm/kunjungan",
+            })
+
+    # 3. Antrean Menunggu Pemeriksaan Dokter (untuk Dokter)
+    if user.role == "dokter":
+        waiting = db.scalars(
+            select(Visit)
+            .where(
+                Visit.arrived_at >= today_start_utc(),
+                Visit.status.in_(["registered", "consented"]),
+                Visit.confirmed_at.is_not(None)
+            )
+            .order_by(Visit.queue_no, Visit.id)
+            .limit(3)
+        ).all()
+        for v in waiting:
+            p_name = v.patient.name if v.patient else "Pasien"
+            items.append({
+                "id": f"queue-{v.id}",
+                "type": "patient_waiting",
+                "severity": "info",
+                "title": f"Antrean No. {v.queue_no or '-'}",
+                "message": f"Pasien {p_name} siap diperiksa.",
+                "created_at": (v.confirmed_at or v.arrived_at).isoformat(),
+                "link": f"/kunjungan/{v.id}/subjektif",
+            })
+
+    return {
+        "status": "ok",
+        "count": len(items),
+        "items": items,
+    }
+
+
 
 def _advance_queue(db: Session, done: Visit, user: User) -> Visit | None:
     """Setelah SOAP divalidasi, pasien menunggu berikutnya otomatis menjadi "Antrean saat ini".

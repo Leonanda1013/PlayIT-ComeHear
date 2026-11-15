@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Building2, CalendarDays, ChevronDown, CloudUpload, FileText, History, LayoutDashboard, LogOut, Menu, Settings, User as UserIcon, UserRound, Users, X } from 'lucide-react'
-import { NavLink, useLocation } from 'react-router'
+import { Bell, Building2, CalendarDays, CheckCircle2, ChevronDown, CloudUpload, FileText, History, LayoutDashboard, LogOut, Menu, Settings, User as UserIcon, UserRound, Users, X } from 'lucide-react'
+import { Link, NavLink, useLocation } from 'react-router'
 import { btn, Dialog } from '@/components/ui/kit'
-import { getLocations, setLocation } from '@/lib/rm'
+import { getLocations, getNotifications, setLocation } from '@/lib/rm'
+import { getClinicProfile } from '@/lib/clinicConfig'
 import { isDoctor } from '@/lib/format'
 import type { LocationRef, User } from '@/lib/types'
 
@@ -48,6 +49,10 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
   const [locId, setLocId] = useState<number | null>(readLocCookie)
   const queryClient = useQueryClient()
   const locations = useQuery({ queryKey: ['locations'], queryFn: getLocations, staleTime: 5 * 60_000 })
+  const clinic = useQuery({ queryKey: ['clinic-profile'], queryFn: getClinicProfile, staleTime: 10 * 60_000 })
+  const notifs = useQuery({ queryKey: ['notifications'], queryFn: getNotifications, refetchInterval: 20_000 })
+  const clinicName = clinic.data?.name || 'Klinik Bunga Melati'
+  const unreadCount = notifs.data?.count || 0
   const current: LocationRef | undefined = locations.data?.find((l) => l.id === locId) || locations.data?.at(-1)
   const poli = current?.poli || 'Poli Umum'
   const room = current?.name || 'Bilik Konsultasi 03'
@@ -83,10 +88,10 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
           </nav>
 
           <div className="relative -mx-2 mt-auto pt-6">
-            {accountOpen && <AccountPopover user={user} doctor={doctor} onClose={() => setAccountOpen(false)} onLogout={() => { setAccountOpen(false); setConfirmLogout(true) }} />}
+            {accountOpen && <AccountPopover user={user} doctor={doctor} clinicName={clinicName} onClose={() => setAccountOpen(false)} onLogout={() => { setAccountOpen(false); setConfirmLogout(true) }} />}
             <button type="button" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen} className="flex w-full items-center gap-2.5 h-[60px] rounded-[10px] border border-[#a8e0e8] bg-[#dcf3f6] px-3 text-left transition hover:border-ch-brand">
               <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-[18px]" /></span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">Klinik Bunga Melati</span></span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">{clinicName}</span></span>
               {doctor ? <Settings className="size-[17px] text-[#38505e]" /> : <ChevronDown className="size-4 text-[#38505e]" />}
             </button>
           </div>
@@ -106,8 +111,58 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
             </div>
             <span className="hidden h-9 items-center gap-2 rounded-[10px] border border-[#d6e3e9] bg-white px-3 font-semibold md:flex"><CalendarDays className="size-4 text-ch-brand" /> {todayLabel}</span>
             <div className="relative">
-              <button type="button" aria-label="Notifikasi" aria-expanded={bellOpen} onClick={() => setBellOpen(!bellOpen)} className="relative grid size-9 place-items-center rounded-[10px] border border-[#d2e1e7] bg-white shadow-sm hover:border-ch-brand"><Bell className="size-[17px] text-[#305165]" /><span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-[#e03131] ring-2 ring-white" /></button>
-              {bellOpen && <div className="absolute right-0 top-11 z-40 w-72 rounded-[12px] border border-[#d3e2e8] bg-white p-4 text-sm shadow-lg"><p className="font-semibold">Notifikasi</p><p className="mt-1 text-xs text-ch-muted">Status kirim SATUSEHAT dan kunjungan baru akan muncul di sini.</p></div>}
+              <button
+                type="button"
+                aria-label="Notifikasi"
+                aria-expanded={bellOpen}
+                onClick={() => setBellOpen(!bellOpen)}
+                className="relative grid size-9 place-items-center rounded-[10px] border border-[#d2e1e7] bg-white shadow-sm hover:border-ch-brand"
+              >
+                <Bell className="size-[17px] text-[#305165]" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e03131] px-1 text-[10px] font-bold text-white ring-2 ring-white">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+              {bellOpen && (
+                <div className="absolute right-0 top-11 z-40 w-80 rounded-[14px] border border-[#d3e2e8] bg-white p-3 text-sm shadow-xl">
+                  <div className="flex items-center justify-between border-b border-[#e5eef2] pb-2">
+                    <p className="font-bold text-[14px] text-ch-ink">Pemberitahuan</p>
+                    <span className="rounded-full bg-[#eef5f8] px-2 py-0.5 text-[11px] font-semibold text-ch-teal">
+                      {unreadCount} aktif
+                    </span>
+                  </div>
+                  <div className="mt-2 max-h-72 overflow-y-auto divide-y divide-[#f0f5f7]">
+                    {notifs.isPending ? (
+                      <p className="py-4 text-center text-xs text-ch-muted">Memuat notifikasi…</p>
+                    ) : !notifs.data?.items?.length ? (
+                      <div className="py-6 text-center">
+                        <CheckCircle2 className="mx-auto size-7 text-[#2cb170]" />
+                        <p className="mt-1.5 text-xs font-semibold text-ch-ink">Semua Beres</p>
+                        <p className="text-[11px] text-ch-muted">Tidak ada kendala SATUSEHAT atau antrean tertunda.</p>
+                      </div>
+                    ) : (
+                      notifs.data.items.map((item) => (
+                        <Link
+                          key={item.id}
+                          to={item.link}
+                          onClick={() => setBellOpen(false)}
+                          className="flex items-start gap-2.5 py-2.5 px-1 hover:bg-[#f3f9fb] rounded-lg transition-colors"
+                        >
+                          <span className={`mt-1 size-2 rounded-full shrink-0 ${
+                            item.severity === 'danger' ? 'bg-[#e03131]' : item.severity === 'warning' ? 'bg-[#f59f00]' : 'bg-[#1098ad]'
+                          }`} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-ch-ink truncate">{item.title}</p>
+                            <p className="text-[11px] text-ch-muted leading-tight line-clamp-2">{item.message}</p>
+                          </div>
+                        </Link>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -122,7 +177,7 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
   )
 }
 
-function AccountPopover({ user, doctor, onClose, onLogout }: { user: User; doctor: boolean; onClose: () => void; onLogout: () => void }) {
+function AccountPopover({ user, doctor, clinicName, onClose, onLogout }: { user: User; doctor: boolean; clinicName: string; onClose: () => void; onLogout: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const onDown = (event: MouseEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) onClose() }
@@ -134,7 +189,7 @@ function AccountPopover({ user, doctor, onClose, onLogout }: { user: User; docto
   return <div ref={ref} className="absolute bottom-[72px] left-0 z-40 w-[272px] rounded-[14px] border border-[#d3e2e8] bg-white p-3 shadow-[0_12px_32px_rgba(8,29,45,0.14)]">
     <div className="flex items-center gap-3 border-b border-[#e3ecf0] pb-3">
       <span className="grid size-10 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-5" /></span>
-      <div className="min-w-0"><p className="truncate text-sm font-bold">{user.name}</p><p className="truncate text-xs text-ch-muted">{user.email}</p><p className="text-[11px] text-ch-teal">{doctor ? 'Dokter · Klinik Bunga Melati' : 'Petugas Rekam Medis · Klinik Bunga Melati'}</p></div>
+      <div className="min-w-0"><p className="truncate text-sm font-bold">{user.name}</p><p className="truncate text-xs text-ch-muted">{user.email}</p><p className="text-[11px] text-ch-teal">{doctor ? `Dokter · ${clinicName}` : `Petugas Rekam Medis · ${clinicName}`}</p></div>
     </div>
     {doctor && <button type="button" onClick={onClose} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#33475b] hover:bg-[#eef6f8]"><Settings className="size-4" /> Pengaturan</button>}
     <button type="button" onClick={onLogout} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold text-[#bf2e36] hover:bg-[#fdecec]"><LogOut className="size-4" /> Logout</button>

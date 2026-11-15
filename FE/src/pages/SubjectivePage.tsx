@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, MicOff, Pause, Play, Square } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
-import { TranscriptBubble } from '@/components/Scribe'
+import { TranscriptBubble, Waveform } from '@/components/Scribe'
 import { Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
 import { getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
@@ -24,6 +24,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const [paused, setPaused] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [error, setError] = useState('')
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
   const sessionId = useRef<number | null>(null)
@@ -58,13 +59,13 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     try {
       await saved()
       const media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
-      stream.current = media; seq.current = 0; sessionId.current = null; uploads.current = Promise.resolve()
+      stream.current = media; setActiveStream(media); seq.current = 0; sessionId.current = null; uploads.current = Promise.resolve()
       const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined
       const next = new MediaRecorder(media, type ? { mimeType: type } : undefined); recorder.current = next
       next.ondataavailable = (event) => { if (event.data.size) sendChunk(event.data) }
-      next.onerror = () => { setError('Rekaman terhenti. Coba lagi atau gunakan pencatatan manual.'); setRecording(false) }
+      next.onerror = () => { setError('Rekaman terhenti. Coba lagi atau gunakan pencatatan manual.'); setActiveStream(null); setRecording(false) }
       next.onstop = async () => {
-        media.getTracks().forEach((track) => track.stop()); setRecording(false); setPaused(false); setBusy(true)
+        media.getTracks().forEach((track) => track.stop()); setActiveStream(null); setRecording(false); setPaused(false); setBusy(true)
         try {
           await uploads.current
           if (!sessionId.current) throw new Error('Tidak ada audio yang terekam. Coba rekam ulang.')
@@ -127,6 +128,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       <section className="flex min-h-[115px] flex-wrap items-center gap-5 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4" aria-live="polite">
         <span className={`inline-flex h-[38px] items-center gap-2.5 rounded-[8px] border px-3.5 text-[14px] font-semibold ${recording ? 'border-[#f2a7a7] bg-[#fff1f1] text-[#b42727]' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}><span className={`size-2 rounded-full ${recording ? 'animate-pulse bg-[#e03131]' : 'bg-[#0b6e7d]'}`} />{recording ? (paused ? 'Rekaman Dijeda' : 'Sedang Merekam') : busy ? 'Mengirim Rekaman…' : 'Mikrofon Siap'}</span>
         <p className="font-inter text-[22px] font-bold tabular-nums text-[#3f4c55]">{mmss(seconds)} <span className="font-jakarta text-[15px] font-semibold text-[#5f7284]">menit</span></p>
+        {recording && !paused && <Waveform stream={activeStream} />}
         <div className="ml-auto flex flex-wrap gap-4">
           {!recording ? <>
             <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-3 text-[14px] font-medium text-[#3d5266]"><ChevronDown className="size-3.5" /> Mikrofon Bilik 3</button>

@@ -1,5 +1,5 @@
 import { apiRequest } from '@/lib/api'
-import type { HistoryVisit, LocationRef, Patient, RmVisit, RmVisitsResponse, SatusehatRow } from '@/lib/types'
+import type { HistoryVisit, LocationRef, NotificationsResponse, Patient, RmVisit, RmVisitsResponse, SatusehatRow } from '@/lib/types'
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
@@ -43,3 +43,6 @@ export const getSatusehat = () =>
 
 export const requeueSubmission = (id: number) =>
   apiRequest<{ message: string }>(`/api/backend/submissions/${id}/requeue`, { method: 'POST' })
+
+export const getNotifications = () =>
+  apiRequest<NotificationsResponse>('/api/backend/notifikasi')

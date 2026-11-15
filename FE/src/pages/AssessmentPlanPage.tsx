@@ -4,12 +4,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { IcdPicker, type IcdValue } from '@/components/IcdPicker'
+import { KfaPicker } from '@/components/KfaPicker'
 import { btn, Check, FieldCaps, inputClass, Label, Notice, Panel, Radio, SelectInput, TextArea } from '@/components/ui/kit'
 import { saveSoap } from '@/lib/clinical'
 import type { Consultation } from '@/lib/types'
-
-/** Obat dengan kode KFA yang sudah terbukti diterima sandbox; hanya ini yang dikirim sebagai MedicationRequest. */
-export const KFA_DRUGS = [{ code: '93001926', display: 'Paracetamol 120 mg/5 mL Sirup (CASETAMOL)', unit: 'mL' }]
 
 type Dx = { text: string; icd: IcdValue; onset: 'akut' | 'kronis' }
 type Ingredient = { name: string; dose: string }
@@ -20,7 +18,7 @@ type Rx = {
 }
 export type ApState = { dx: Dx[]; tindakan: string; plan: string; with_rx: boolean; rx: Rx[]; next_date: string; next_note: string }
 
-const emptyRx = (): Rx => ({ type: 'non', kfa: '', drug: '', dose: '', unit: 'mL', interval: '8', days: '3', qty: '1', prn: false, prn_text: '', instruction: '', r_name: '', r_form: 'Puyer', r_qty: '10', r_ingredients: [{ name: '', dose: '' }], r_instruction: '' })
+const emptyRx = (): Rx => ({ type: 'non', kfa: '', drug: '', dose: '', unit: 'tablet', interval: '8', days: '3', qty: '1', prn: false, prn_text: '', instruction: '', r_name: '', r_form: 'Puyer', r_qty: '10', r_ingredients: [{ name: '', dose: '' }], r_instruction: '' })
 
 export function loadAp(data: Consultation): ApState {
   const saved = data.note.extra?.asesmen_plan as ApState | undefined
@@ -33,7 +31,7 @@ export function loadAp(data: Consultation): ApState {
 
 export function rxText(r: Rx) {
   if (r.type === 'racikan') return `Racikan ${r.r_name || '-'} (${r.r_form}, ${r.r_qty || '-'} bungkus): ${r.r_ingredients.filter((i) => i.name).map((i) => `${i.name} ${i.dose}`).join(', ') || '-'}. ${r.r_instruction}`.trim()
-  return `${r.drug || KFA_DRUGS.find((d) => d.code === r.kfa)?.display || '-'} ${r.dose || '-'} ${r.unit} tiap ${r.interval || '-'} jam selama ${r.days || '-'} hari, jumlah ${r.qty || '-'}${r.prn ? `, bila perlu (${r.prn_text || 'sesuai keluhan'})` : ''}. ${r.instruction}`.trim()
+  return `${r.drug || (r.kfa ? `KFA ${r.kfa}` : '-') } ${r.dose || '-'} ${r.unit} tiap ${r.interval || '-'} jam selama ${r.days || '-'} hari, jumlah ${r.qty || '-'}${r.prn ? `, bila perlu (${r.prn_text || 'sesuai keluhan'})` : ''}. ${r.instruction}`.trim()
 }
 
 export function AssessmentPlanPage({ data }: { data: Consultation }) {
@@ -54,7 +52,7 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
     const primary = s.dx[0]
     if (next && !primary?.icd) { setError('Pilih kode ICD-10 untuk diagnosis utama sebelum validasi.'); return }
     setBusy(true)
-    const structured = s.with_rx ? s.rx.find((r) => r.type === 'non' && KFA_DRUGS.some((d) => d.code === r.kfa)) : undefined
+    const structured = s.with_rx ? s.rx.find((r) => r.type === 'non' && Boolean(r.kfa && r.kfa !== 'manual')) : undefined
     const planParts = [s.plan.trim(), s.tindakan.trim() && `Permintaan tindakan:\n${s.tindakan.trim()}`, s.with_rx && `Resep:\n${s.rx.map((r, i) => `${i + 1}. ${rxText(r)}`).join('\n')}`, s.next_date && `Konsultasi berikutnya: ${s.next_date}${s.next_note ? ` — ${s.next_note}` : ''}`].filter(Boolean)
     const assessment = s.dx.filter((d) => d.icd || d.text).map((d, i) => `${i === 0 ? 'Diagnosis utama' : `Diagnosis sekunder ${i}`}: ${d.text || d.icd?.display} (${d.icd?.code || 'tanpa kode'}, ${d.onset}).`).join(' ')
     try {
@@ -110,8 +108,25 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
             <div className="flex flex-wrap items-center justify-between gap-3"><b className="text-[13px]">Resep {index + 1}</b>{s.rx.length > 1 && <button type="button" onClick={() => set('rx', s.rx.filter((_, i) => i !== index))} className="inline-flex items-center gap-1 text-xs font-semibold text-[#bd3030]"><Trash2 className="size-3.5" /> Hapus resep</button>}</div>
             <div className="mt-2 flex flex-wrap items-center gap-4 border-b border-[#e3ecf0] pb-3 text-xs"><span className="text-ch-muted">Tipe Resep:</span><Radio name={`tipe-${index}`} label="Non-Racikan" checked={r.type === 'non'} onChange={() => patchRx(index, { type: 'non' })} /><Radio name={`tipe-${index}`} label="Racikan / Puyer" checked={r.type === 'racikan'} onChange={() => patchRx(index, { type: 'racikan' })} /></div>
             {r.type === 'non' ? <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <div className="md:col-span-2"><Label>Obat (KFA)</Label><SelectInput value={r.kfa} onChange={(e) => { const drug = KFA_DRUGS.find((d) => d.code === e.target.value); patchRx(index, { kfa: e.target.value, drug: drug?.display || '', unit: drug?.unit || r.unit }) }}><option value="">Pilih obat</option>{KFA_DRUGS.map((d) => <option key={d.code} value={d.code}>{d.display} · KFA {d.code}</option>)}<option value="manual">Obat lain (tulis manual, tidak dikirim terstruktur)</option></SelectInput>{r.kfa === 'manual' && <input className={`${inputClass} mt-2`} value={r.drug} onChange={(e) => patchRx(index, { drug: e.target.value })} placeholder="Nama obat dan kekuatan" />}</div>
-              <div><Label>Dosis / satuan</Label><div className="flex gap-2"><input className={inputClass} inputMode="decimal" value={r.dose} onChange={(e) => patchRx(index, { dose: e.target.value })} placeholder="5" /><input aria-label="Satuan" className={`${inputClass} w-20`} value={r.unit} onChange={(e) => patchRx(index, { unit: e.target.value })} /></div></div>
+              <div className="md:col-span-2">
+                <Label>Obat (KFA)</Label>
+                {r.kfa === 'manual' ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-ch-muted">Input Manual Non-KFA</span>
+                      <button type="button" onClick={() => patchRx(index, { kfa: '', drug: '' })} className="text-[11px] font-semibold text-ch-brand hover:underline">Pilih dari katalog KFA</button>
+                    </div>
+                    <input className={inputClass} value={r.drug} onChange={(e) => patchRx(index, { drug: e.target.value })} placeholder="Nama obat dan kekuatan (mis. Cefixime 100 mg)" />
+                  </div>
+                ) : (
+                  <KfaPicker
+                    value={r.kfa ? { code: r.kfa, display: r.drug || `KFA ${r.kfa}`, unit: r.unit } : null}
+                    onChange={(val) => patchRx(index, { kfa: val?.code || '', drug: val?.display || '', unit: val?.unit || r.unit })}
+                    onSelectManual={() => patchRx(index, { kfa: 'manual', drug: '' })}
+                  />
+                )}
+              </div>
+              <div><Label>Dosis / satuan</Label><div className="flex gap-2"><input className={inputClass} inputMode="decimal" value={r.dose} onChange={(e) => patchRx(index, { dose: e.target.value })} placeholder="5" /><input aria-label="Satuan" className={`${inputClass} w-24`} value={r.unit} onChange={(e) => patchRx(index, { unit: e.target.value })} /></div></div>
               <div><Label>Interval (jam)</Label><input className={inputClass} inputMode="numeric" value={r.interval} onChange={(e) => patchRx(index, { interval: e.target.value })} /></div>
               <div><Label>Lama (hari)</Label><input className={inputClass} inputMode="numeric" value={r.days} onChange={(e) => patchRx(index, { days: e.target.value })} /></div>
               <div><Label>Jumlah</Label><input className={inputClass} inputMode="numeric" value={r.qty} onChange={(e) => patchRx(index, { qty: e.target.value })} /></div>

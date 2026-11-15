@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     satusehat_client_secret: str = ""
     satusehat_org_id: str = "647ba346-c21f-4328-86f2-c6ce268cde97"
 
+    clinic_name: str = "KLINIK BUNGA MELATI"
+    clinic_service_type: str = "PELAYANAN KESEHATAN RAWAT JALAN & REKAM MEDIS ELEKTRONIK"
+    clinic_address: str = "Jl. Melati Raya No. 12, Kebayoran Baru, Jakarta Selatan 12160"
+    clinic_phone: str = "(021) 720-1845"
+    clinic_email: str = "info@klinikbungamelati.id"
+    clinic_license: str = "445/018/K-PRATAMA/DPMPTSP/2023"
+    clinic_faskes_code: str = "317101234"
+
     asr_model: str = "small"
     asr_device: str = "cpu"
     asr_compute_type: str = "int8"

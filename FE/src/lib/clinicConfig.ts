@@ -1,3 +1,5 @@
+import { apiRequest } from '@/lib/api'
+
 export type ClinicConfig = {
   name: string
   serviceType: string
@@ -21,4 +23,13 @@ export const DEFAULT_CLINIC_CONFIG: ClinicConfig = {
   email: import.meta.env.VITE_CLINIC_EMAIL || 'info@klinikbungamelati.id',
   licenseNumber: import.meta.env.VITE_CLINIC_LICENSE || '445/018/K-PRATAMA/DPMPTSP/2023',
   faskesCode: import.meta.env.VITE_CLINIC_FASKES_CODE || '317101234',
+}
+
+export const getClinicProfile = async (): Promise<ClinicConfig> => {
+  try {
+    const res = await apiRequest<ClinicConfig>('/api/clinic')
+    return { ...DEFAULT_CLINIC_CONFIG, ...res }
+  } catch {
+    return DEFAULT_CLINIC_CONFIG
+  }
 }

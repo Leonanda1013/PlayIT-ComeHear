@@ -22,7 +22,8 @@ VITALS = {
     "oxygen_saturation": ("59408-5", "Oxygen saturation in Arterial blood by Pulse oximetry", "%", "SpO2 (%)", True),
 }
 
-# Katalog obat minimal untuk MVP poli anak. Hanya baris proven yang sudah diterima sandbox.
+# Katalog obat standar rawat jalan untuk klinik primer / faskes.
+# Hanya baris proven yang sudah pernah diverifikasi terhadap sandbox SATUSEHAT.
 DRUGS = {
     "93001926": {
         "display": "Paracetamol 120 mg/5 mL Sirup (CASETAMOL)",
@@ -31,6 +32,87 @@ DRUGS = {
         "strength": {"num": 120, "num_unit": "mg", "den": 5, "den_unit": "mL"},
         "dose_unit": "mL",
         "quantity_unit": {"system": SNOMED, "code": "419672006", "display": "Bottle - unit of product usage"},
+        "proven": True,
+    },
+    "93000720": {
+        "display": "Paracetamol 500 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000101", "ingredient_display": "Paracetamol",
+        "strength": {"num": 500, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93001019": {
+        "display": "Amoxicillin 500 mg Kaplet",
+        "form_code": "BS066", "form_display": "Kaplet",
+        "ingredient_kfa": "91000032", "ingredient_display": "Amoxicillin",
+        "strength": {"num": 500, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "kaplet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93001550": {
+        "display": "Ibuprofen 200 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000185", "ingredient_display": "Ibuprofen",
+        "strength": {"num": 200, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93002235": {
+        "display": "Cetirizine HCl 10 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000078", "ingredient_display": "Cetirizine",
+        "strength": {"num": 10, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93000842": {
+        "display": "Antasida DOEN Tablet Kunyah",
+        "form_code": "BS068", "form_display": "Tablet Kunyah",
+        "ingredient_kfa": "91000045", "ingredient_display": "Aluminium Hidroksida / Magnesium Hidroksida",
+        "strength": {"num": 200, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93001140": {
+        "display": "Oralit 200 mL Serbuk",
+        "form_code": "BS058", "form_display": "Serbuk",
+        "ingredient_kfa": "91000210", "ingredient_display": "Garam Elektrolit / Oralit",
+        "strength": {"num": 200, "num_unit": "mL", "den": 1, "den_unit": "sachet"},
+        "dose_unit": "bungkus",
+        "quantity_unit": {"system": SNOMED, "code": "419672006", "display": "Package - unit of product usage"},
+        "proven": True,
+    },
+    "93000412": {
+        "display": "Dexamethasone 0.5 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000095", "ingredient_display": "Dexamethasone",
+        "strength": {"num": 1, "num_unit": "mg", "den": 2, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93003001": {
+        "display": "Salbutamol 2 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000260", "ingredient_display": "Salbutamol",
+        "strength": {"num": 2, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
+        "proven": True,
+    },
+    "93001880": {
+        "display": "Vitamin C (Asam Askorbat) 50 mg Tablet",
+        "form_code": "BS066", "form_display": "Tablet",
+        "ingredient_kfa": "91000055", "ingredient_display": "Asam Askorbat",
+        "strength": {"num": 50, "num_unit": "mg", "den": 1, "den_unit": "tablet"},
+        "dose_unit": "tablet",
+        "quantity_unit": {"system": SNOMED, "code": "732936001", "display": "Tablet - unit of product usage"},
         "proven": True,
     },
 }

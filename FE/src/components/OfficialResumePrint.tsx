@@ -1,7 +1,8 @@
+import { useQuery } from '@tanstack/react-query'
 import type { ClinicalNote, Consultation, Resume } from '@/lib/types'
 import { dateId, dateShort } from '@/lib/format'
 import { formatWib } from '@/lib/clinical'
-import { DEFAULT_CLINIC_CONFIG, type ClinicConfig } from '@/lib/clinicConfig'
+import { DEFAULT_CLINIC_CONFIG, getClinicProfile, type ClinicConfig } from '@/lib/clinicConfig'
 
 type ApExtra = {
   tindakan?: string
@@ -29,7 +30,12 @@ export function OfficialResumePrint({
   doctorName?: string
   clinic?: Partial<ClinicConfig>
 }) {
-  const clinic: ClinicConfig = { ...DEFAULT_CLINIC_CONFIG, ...customClinic }
+  const { data: clinicData } = useQuery({
+    queryKey: ['clinic-profile'],
+    queryFn: getClinicProfile,
+    staleTime: 10 * 60_000,
+  })
+  const clinic: ClinicConfig = { ...DEFAULT_CLINIC_CONFIG, ...(clinicData || {}), ...customClinic }
   const { visit, note } = consultation
   const patient = visit.patient
   const location = visit.location
@@ -41,7 +47,8 @@ export function OfficialResumePrint({
   const dpjp =
     doctorName ||
     snapshot?.practitioner?.name ||
-    'dr. Rian Pratama, Sp.PD'
+    visit.doctor ||
+    'Dokter Penanggung Jawab Pelayanan'
 
   const ap = (note.extra?.asesmen_plan || {}) as ApExtra
   const diagnoses = note.diagnoses || []

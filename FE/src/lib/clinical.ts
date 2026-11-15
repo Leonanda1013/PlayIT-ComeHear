@@ -1,5 +1,5 @@
 import { apiRequest } from '@/lib/api'
-import type { Consultation, Resume, ScribeState } from '@/lib/types'
+import type { Consultation, KfaDrug, Resume, ScribeState } from '@/lib/types'
 
 export const subjectiveFields = [
   ['keluhan_utama', 'Keluhan utama'],
@@ -24,3 +24,6 @@ export const saveSoap = (id: number, data: Record<string, string>) => apiRequest
 export function formatWib(value: string | null | undefined) {
   return value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' }).format(new Date(value)) : '—'
 }
+
+export const searchKfaDrugs = (q = '') =>
+  apiRequest<KfaDrug[]>(`/api/kfa?q=${encodeURIComponent(q)}`)

@@ -152,3 +152,28 @@ export type SatusehatRow = {
   visit_id: number; visit_code: string | null; visit_date: string | null
   patient: Patient | null; doctor: string | null; poli: string | null
 }
+
+export type KfaDrug = {
+  code: string
+  display: string
+  form: string
+  dose_unit: string
+  proven: boolean
+}
+
+export type NotificationItem = {
+  id: string
+  type: string
+  severity: 'danger' | 'warning' | 'info'
+  title: string
+  message: string
+  created_at: string
+  link: string
+}
+
+export type NotificationsResponse = {
+  status: string
+  count: number
+  items: NotificationItem[]
+}
+
