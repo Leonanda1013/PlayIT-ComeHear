@@ -13,7 +13,8 @@ _KW = {"demam": "fever", "panas": "fever", "sumer": "fever", "kepala": "headache
 
 def _segments(prompt: str):
     out = []
-    for line in prompt.splitlines():
+    text = prompt.split("TRANSKRIP:\n", 1)[1] if "TRANSKRIP:\n" in prompt else prompt
+    for line in text.splitlines():
         m = _LINE.match(line)
         if m:
             out.append((int(m.group(1)), m.group(2), m.group(3)))
@@ -32,7 +33,8 @@ def _field(segs, words):
 def mock_generate(prompt: str, schema):
     if schema is SpeakerLabels:
         labels = []
-        for line in prompt.splitlines():
+        text = prompt.split("TRANSKRIP:\n", 1)[1] if "TRANSKRIP:\n" in prompt else prompt
+        for line in text.splitlines():
             m = re.match(r"^\[(\d+)\] (.*)$", line)
             if m:
                 t = m.group(2)

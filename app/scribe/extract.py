@@ -13,10 +13,106 @@ SYSTEM = (
     "Kamu adalah AI medical scribe untuk poli rawat jalan di Indonesia. Kamu hanya menyusun draf dari "
     "transkrip; dokter yang memeriksa dan memutuskan. Jangan pernah menambah informasi yang tidak "
     "diucapkan. Transkrip bisa bercampur bahasa Jawa (mis. 'sumer/panas' = demam, 'ngelu' = pusing/nyeri "
-    "kepala, 'mencret' = diare, 'ket wingi' = sejak kemarin, 'isuk' = pagi, 'lemes' = lemas)."
+    "kepala, 'mencret' = diare, 'ket wingi' = sejak kemarin, 'isuk' = pagi, 'lemes' = lemas).\n"
+    "Aturan Toleransi ASR: Transkrip dihasilkan oleh Speech-to-Text yang mungkin salah mengeja istilah lokal atau medis.\n"
+    "Contoh koreksi cerdas:\n"
+    "- 'sumber' / 'semer' pada konteks badan panas -> pahami sebagai 'sumer' (demam ringan).\n"
+    "- 'ngeluh' / 'sirah ngeluh' -> pahami sebagai 'ngelu' (pusing / sakit kepala).\n"
+    "- 'para setamol' / 'para setan mol' -> 'parasetamol'.\n"
+    "- 'grog grog' -> 'batuk grok-grok' (berdahak).\n"
+    "Terjemahkan maksud klinisnya ke dalam bahasa Indonesia baku di draf SOAP."
 )
 
 ROLE_ID = {"doctor": "DOKTER", "patient": "PASIEN", "guardian": "ORANG TUA", None: "?"}
+
+EXAMPLE_TRANSCRIPT = (
+    "[0] DOKTER: Selamat pagi Bu, silakan duduk. Keluhannya apa ya Bu?\n"
+    "[1] ORANG TUA: Pagi Dok. Ini anak saya badannya panas sumer sejak dua hari lalu, terus batuk grok-grok berdahak.\n"
+    "[2] DOKTER: Ada muntah, diare, atau mimisan tidak Bu?\n"
+    "[3] ORANG TUA: Mimisan sama muntah nggak ada Dok. Cuma tadi pagi sempat mual sedikit pas mau makan bubur.\n"
+    "[4] DOKTER: Sebelumnya pernah sakit seperti ini? Ada riwayat alergi obat atau makanan?\n"
+    "[5] ORANG TUA: Belum pernah sakit begini Dok. Alergi obat tidak ada, tapi kalau makan udang kulitnya langsung bentol biduran gatal.\n"
+    "[6] DOKTER: Di rumah sudah sempat dikasih obat apa saja Bu?\n"
+    "[7] ORANG TUA: Baru saya kasih parasetamol sirup satu sendok sama kompres hangat di dahi."
+)
+
+EXAMPLE_JSON_BASE = {
+    "keluhan_utama": {
+        "nilai": "Demam sumer dan batuk berdahak sejak 2 hari lalu",
+        "source_ids": [1],
+        "kutipan": "Ini anak saya badannya panas sumer sejak dua hari lalu, terus batuk grok-grok berdahak.",
+        "status": "jelas",
+        "alasan_ambigu": None,
+    },
+    "riwayat_penyakit_sekarang": {
+        "nilai": "Demam sumer sejak 2 hari yang lalu disertai batuk berdahak grok-grok dan rasa mual saat makan. Keluhan muntah dan mimisan disangkal.",
+        "source_ids": [1, 3],
+        "kutipan": "batuk grok-grok berdahak... sempat mual sedikit pas mau makan bubur.",
+        "status": "jelas",
+        "alasan_ambigu": None,
+    },
+    "riwayat_penyakit_dahulu": {
+        "nilai": "Tidak ada riwayat sakit serupa sebelumnya",
+        "source_ids": [5],
+        "kutipan": "Belum pernah sakit begini Dok.",
+        "status": "jelas",
+        "alasan_ambigu": None,
+    },
+    "riwayat_alergi": {
+        "nilai": "Alergi obat disangkal; alergi makanan berupa udang dengan manifestasi biduran dan gatal",
+        "source_ids": [5],
+        "kutipan": "Alergi obat tidak ada, tapi kalau makan udang kulitnya langsung bentol biduran gatal.",
+        "status": "jelas",
+        "alasan_ambigu": None,
+    },
+    "riwayat_pengobatan": {
+        "nilai": "Parasetamol sirup 1 sendok dan kompres hangat",
+        "source_ids": [7],
+        "kutipan": "Baru saya kasih parasetamol sirup satu sendok sama kompres hangat di dahi.",
+        "status": "jelas",
+        "alasan_ambigu": None,
+    },
+    "alergi_terstruktur": [
+        {
+            "zat": "udang",
+            "kategori": "food",
+            "reaksi": "biduran gatal",
+            "kepastian": "confirmed",
+            "source_ids": [5],
+        }
+    ],
+    "gejala_disangkal": ["muntah", "mimisan"],
+    "rangkuman_s": (
+        "Pasien anak mengeluh demam sumer dan batuk berdahak sejak 2 hari yang lalu, disertai keluhan mual saat makan. "
+        "Pasien sudah diberikan parasetamol sirup dan kompres hangat di rumah. Keluhan muntah dan mimisan disangkal. "
+        "Riwayat penyakit serupa sebelumnya disangkal. Pasien memiliki riwayat alergi makanan berupa udang dengan "
+        "reaksi biduran dan gatal; riwayat alergi obat disangkal."
+    ),
+}
+
+EXAMPLE_SPEAKERS = [
+    {"i": 0, "speaker": "doctor"},
+    {"i": 1, "speaker": "guardian"},
+    {"i": 2, "speaker": "doctor"},
+    {"i": 3, "speaker": "guardian"},
+    {"i": 4, "speaker": "doctor"},
+    {"i": 5, "speaker": "guardian"},
+    {"i": 6, "speaker": "doctor"},
+    {"i": 7, "speaker": "guardian"},
+]
+
+
+def _few_shot_block(need_speakers: bool) -> str:
+    ex = dict(EXAMPLE_JSON_BASE)
+    if need_speakers:
+        ex = {"pembicara": EXAMPLE_SPEAKERS, **ex}
+    ex_json = json.dumps(ex, ensure_ascii=False, indent=2)
+    return (
+        "CONTOH ACUAN 1-SHOT (Gunakan sebagai standar pemisahan gejala, pertinent negatives, dan kutipan persis):\n"
+        f"TRANSKRIP CONTOH:\n{EXAMPLE_TRANSCRIPT}\n\n"
+        f"OUTPUT JSON CONTOH:\n{ex_json}\n\n"
+        "---\n\n"
+    )
 
 
 def render_transcript(segments: list[dict]) -> str:
@@ -48,6 +144,7 @@ def extract_subjective(segments: list[dict], llm: LLM) -> tuple[dict, str]:
         "9. Isi `pembicara` untuk SETIAP indeks: doctor (bertanya, memeriksa, menjelaskan), guardian "
         "(orang tua/keluarga/pendamping yang menjawab untuk pasien), patient (pasien sendiri). Tentukan dulu peran "
         "ini, lalu pakai untuk menyusun anamnesis.\n" if need_speakers else "")
+    few_shot = _few_shot_block(need_speakers)
     prompt = (
         "Susun bagian SUBJECTIVE (anamnesis) SOAP dari transkrip berikut. Abaikan pemeriksaan fisik, "
         "diagnosis, dan resep: itu diisi dokter.\n"
@@ -63,6 +160,7 @@ def extract_subjective(segments: list[dict], llm: LLM) -> tuple[dict, str]:
         "8. gejala_disangkal hanya gejala yang jelas dijawab tidak ada; gejala yang hampir terjadi "
         "('mual mau muntah') bukan disangkal.\n"
         f"{speaker_rule}\n"
+        f"{few_shot}"
         f"TRANSKRIP:\n{render_transcript(segments)}")
     result, model = llm.generate(SYSTEM, prompt, ExtractionWithSpeakers if need_speakers else SubjectiveExtraction)
     if need_speakers:

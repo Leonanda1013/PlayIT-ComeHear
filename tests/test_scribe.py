@@ -15,8 +15,12 @@ Ibu: Kayaknya nggak ada Dok, tapi kalau makan udang gatal-gatal."""
 
 def test_wer_normalization_is_fair():
     assert normalize("Suhu 38,6 derajat, Dok!") == "suhu 38 koma 6 derajat dokter"
+    assert normalize("Suhu 38.6 derajat") == "suhu 38 koma 6 derajat"
     assert normalize("tiga puluh delapan koma enam") == "38 koma 6"
+    assert normalize("Awakke sumer ket wingi") == "badannya demam sejak kemarin"
+    assert normalize("sirahne ngelu") == "kepalanya pusing"
     assert wer("Demam, sudah tiga hari.", "demam udah 3 hari") == 0.0
+    assert wer("badannya demam sejak kemarin", "awakke sumer ket wingi") == 0.0
     assert abs(wer("anak saya demam", "anak saya diam") - 1 / 3) < 1e-9
 
 
@@ -34,6 +38,19 @@ def test_icd_retrieval_ranks_symptom_codes_and_dedupes(settings):
              IcdPick(code="A01.0", deskripsi_id="", keyakinan=0.6, alasan=""),
              IcdPick(code="X99.9", deskripsi_id="", keyakinan=0.9, alasan="dikarang")]
     assert [p["code"] for p in postprocess(picks, rows)] == ["A01.0"]
+
+
+def test_icd_synonym_expansion_and_code_search(settings):
+    rows = load_icd(str(settings.icd10_seed_csv))
+    # Test Indonesian reverse mapping: "diare" / "mencret" -> A09
+    diare_found = [r.code for r in retrieve(rows, ["diare", "mencret"])]
+    assert "A09" in diare_found
+    # Test Indonesian reverse mapping: "biduran" -> L50.9 (Urticaria)
+    urticaria_found = [r.code for r in retrieve(rows, ["biduran", "gatal"])]
+    assert "L50.9" in urticaria_found
+    # Test direct code search: "A01"
+    code_found = [r.code for r in retrieve(rows, ["A01"])]
+    assert "A01" in code_found and "A01.0" in code_found
 
 
 def test_pipeline_text_to_draft_with_mock(session_factory, db, visit_with_note, settings):
