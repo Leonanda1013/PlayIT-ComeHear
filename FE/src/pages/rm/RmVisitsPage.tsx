@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Eye, Plus, RefreshCw, Search } from 'lucide-react'
+import { ArrowUp, ArrowUpDown, Building2, Eye, Plus, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 import { Link } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -17,6 +17,48 @@ const SCOPES = [['hari_ini', 'Hari Ini'], ['mendatang', 'Mendatang'], ['riwayat'
 const PAGE = 8
 const grid = 'grid grid-cols-[1.5fr_120px_110px_1.1fr_120px_1.3fr_120px] items-center'
 
+type RmSortField = 'patient' | 'date' | 'poli' | 'doctor' | 'type' | 'status'
+type RmSortOrder = 'asc' | 'desc'
+
+function RmSortHeader({
+  label,
+  field,
+  currentField,
+  currentOrder,
+  onSort,
+  className = '',
+}: {
+  label: string
+  field: RmSortField
+  currentField: RmSortField
+  currentOrder: RmSortOrder
+  onSort: (field: RmSortField) => void
+  className?: string
+}) {
+  const isActive = currentField === field
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(field)}
+      className={`group flex items-center gap-1 text-left font-semibold select-none transition hover:text-ch-brand ${
+        isActive ? 'text-ch-brand font-bold' : 'text-[#3f5468]'
+      } ${className}`}
+      title={`Urutkan ${label} (${isActive && currentOrder === 'asc' ? 'Z - A' : 'A - Z'})`}
+    >
+      <span>{label}</span>
+      {isActive ? (
+        <ArrowUp
+          className={`size-3 shrink-0 transition-transform duration-200 ${
+            currentOrder === 'asc' ? '' : 'rotate-180'
+          }`}
+        />
+      ) : (
+        <ArrowUpDown className="size-2.5 shrink-0 text-[#7f93a4]/50 transition group-hover:text-ch-brand group-hover:opacity-100" />
+      )}
+    </button>
+  )
+}
+
 function Stat({ title, value, note, accent }: { title: string; value: number | string; note: string; accent: string }) {
   return <div className="relative overflow-hidden rounded-[14px] border border-[#d3e2e8] bg-ch-panel py-3.5 pl-4 pr-3"><span className="absolute inset-y-0 left-0 w-[4px]" style={{ background: accent }} /><p className="text-[13px] font-semibold text-[#33475b]">{title}</p><p className="mt-1 flex items-baseline gap-2"><b className="text-[22px] leading-7">{value}</b><span className="text-[10px] text-ch-muted">{note}</span></p></div>
 }
@@ -29,12 +71,51 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
   const [poli, setPoli] = useState('')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(0)
+  const [sortField, setSortField] = useState<RmSortField>('date')
+  const [sortOrder, setSortOrder] = useState<RmSortOrder>('desc')
   const [detail, setDetail] = useState<RmVisit | null>(null)
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
   const confirm = useConfirmArrival()
   const visits = useQuery({ queryKey: ['rm-visits', scope, q, scope === 'hari_ini' ? tanggal : '', status], queryFn: () => getRmVisits({ scope, q, status, tanggal: scope === 'hari_ini' ? tanggal : '' }), refetchInterval: 20_000 })
   const polis = useMemo(() => [...new Set((visits.data?.rows || []).map((r) => r.location.poli || r.location.name))], [visits.data])
-  const rows = (visits.data?.rows || []).filter((r) => !poli || (r.location.poli || r.location.name) === poli)
+
+  const handleSort = (field: RmSortField) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortField(field)
+      setSortOrder(field === 'date' ? 'desc' : 'asc')
+    }
+    setPage(0)
+  }
+
+  const rows = useMemo(() => {
+    const list = (visits.data?.rows || []).filter((r) => !poli || (r.location.poli || r.location.name) === poli)
+    return list.slice().sort((a, b) => {
+      let cmp = 0
+      if (sortField === 'patient') {
+        cmp = (a.patient?.name || '').localeCompare(b.patient?.name || '', 'id', { sensitivity: 'base' })
+      } else if (sortField === 'date') {
+        const timeA = new Date(a.visit_date || 0).getTime()
+        const timeB = new Date(b.visit_date || 0).getTime()
+        cmp = timeA - timeB
+      } else if (sortField === 'poli') {
+        const pA = a.location.poli || a.location.name || ''
+        const pB = b.location.poli || b.location.name || ''
+        cmp = pA.localeCompare(pB, 'id', { sensitivity: 'base' })
+      } else if (sortField === 'doctor') {
+        cmp = (a.doctor || '').localeCompare(b.doctor || '', 'id', { sensitivity: 'base' })
+      } else if (sortField === 'type') {
+        cmp = (a.visit_type || '').localeCompare(b.visit_type || '', 'id', { sensitivity: 'base' })
+      } else if (sortField === 'status') {
+        const sA = rmStatusMeta[a.rm_status]?.label || a.rm_status
+        const sB = rmStatusMeta[b.rm_status]?.label || b.rm_status
+        cmp = sA.localeCompare(sB, 'id', { sensitivity: 'base' })
+      }
+      return sortOrder === 'asc' ? cmp : -cmp
+    })
+  }, [visits.data, poli, sortField, sortOrder])
+
   const pages = Math.max(1, Math.ceil(rows.length / PAGE))
   const shown = rows.slice(page * PAGE, page * PAGE + PAGE)
   const c = visits.data?.counts
@@ -58,14 +139,22 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
     <div className="mt-3 grid gap-3 md:grid-cols-[1.3fr_.9fr_.9fr_1.2fr]">
       <label className="relative"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ch-brand" /><span className="sr-only">Cari pasien</span><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0) }} placeholder="Cari nama pasien atau nomor RM" className={`${inputClass} pl-9 text-[13px]`} /></label>
       <label><span className="sr-only">Tanggal</span><input type="date" value={tanggal} disabled={scope !== 'hari_ini'} onChange={(e) => { setTanggal(e.target.value || todayIso()); setPage(0) }} className={`${inputClass} text-[13px]`} /></label>
-      <SelectInput aria-label="Poli" value={poli} onChange={(e) => { setPoli(e.target.value); setPage(0) }} className="text-[13px]"><option value="">Semua Poli</option>{polis.map((p) => <option key={p}>{p}</option>)}</SelectInput>
-      <SelectInput aria-label="Status kunjungan" value={status} onChange={(e) => { setStatus(e.target.value); setPage(0) }} className="text-[13px]"><option value="">Semua Status</option>{Object.entries(rmStatusMeta).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}</SelectInput>
+      <SelectInput icon={Building2} aria-label="Poli" value={poli} onChange={(e) => { setPoli(e.target.value); setPage(0) }} className="text-[13px]"><option value="">Semua Poli</option>{polis.map((p) => <option key={p}>{p}</option>)}</SelectInput>
+      <SelectInput icon={SlidersHorizontal} aria-label="Status kunjungan" value={status} onChange={(e) => { setStatus(e.target.value); setPage(0) }} className="text-[13px]"><option value="">Semua Status</option>{Object.entries(rmStatusMeta).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}</SelectInput>
     </div>
 
     <Panel className="mt-4">
       <div className="flex items-center justify-between"><h2 className="text-[16px] font-bold">{title}</h2><button type="button" onClick={() => visits.refetch()} className="inline-flex items-center gap-1.5 text-[11px] text-ch-muted hover:text-ch-teal"><RefreshCw className={`size-3.5 ${visits.isFetching ? 'animate-spin' : ''}`} /> Diperbarui pukul {timeWib(visits.data?.updated_at).replace(' WIB', '')} WIB</button></div>
       <div className="mt-3 overflow-x-auto"><div className="min-w-[900px]">
-        <div className={`${grid} rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]`}><span>Pasien</span><span>Tanggal Kunjungan</span><span>Poli</span><span>Dokter</span><span>Jenis Kunjungan</span><span>Status Kunjungan</span><span className="text-right">Aksi</span></div>
+        <div className={`${grid} rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]`}>
+          <RmSortHeader label="Pasien" field="patient" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <RmSortHeader label="Tanggal Kunjungan" field="date" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <RmSortHeader label="Poli" field="poli" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <RmSortHeader label="Dokter" field="doctor" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <RmSortHeader label="Jenis Kunjungan" field="type" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <RmSortHeader label="Status Kunjungan" field="status" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+          <span className="text-right font-semibold text-[#3f5468]">Aksi</span>
+        </div>
         {visits.isPending ? <LoadingState /> : visits.isError ? <ErrorState message={visits.error.message} onRetry={() => visits.refetch()} /> : shown.length === 0 ? <EmptyState title={search || status || poli ? 'Tidak ada kunjungan yang cocok' : 'Belum ada kunjungan'} description={search || status || poli ? 'Ubah pencarian atau filter.' : 'Tambahkan kunjungan baru dari menu Pendaftaran.'} /> : <div className="divide-y divide-[#dde8ec]">
           {shown.map((v) => {
             const meta = rmStatusMeta[v.rm_status]
