@@ -8,6 +8,7 @@ import { ResumeModal } from '@/components/ResumeModal'
 import { EmptyState, ErrorState, LoadingState } from '@/components/Feedback'
 import { apiRequest, ApiError } from '@/lib/api'
 import { dateId, genderShort } from '@/lib/format'
+import { applyCall, QUEUE_KEY } from '@/lib/queue'
 import type { QueueResponse, Visit } from '@/lib/types'
 
 type TabKey = 'semua' | Visit['state']
@@ -16,7 +17,6 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'selanjutnya', label: 'Selanjutnya' }, { key: 'menunggu', label: 'Menunggu' }, { key: 'selesai', label: 'Selesai' },
 ]
 
-const QUEUE_KEY = ['queue']
 // Kolom mengikuti frame 1440: No 52 · Status 148 · Nama (sisa) · Draft SOAP 200 · Aksi 170.
 const grid = 'grid grid-cols-[52px_148px_minmax(260px,1fr)_200px_170px] items-center'
 
@@ -25,15 +25,6 @@ const statusPill: Record<Visit['state'], [string, string]> = {
   saat_ini: ['Antrean saat ini', 'border-[#2f8cff] bg-[#eaf3ff] text-[#0a66d1]'],
   selanjutnya: ['Pasien Selanjutnya', 'border-[#a5e1ea] bg-[#e4f6f9] text-[#0b7f91]'],
   menunggu: ['Menunggu', 'border-[#d3dde4] bg-[#eef2f5] text-[#5b6d7d]'],
-}
-
-/** Hitung ulang status antrean setelah satu pasien dipanggil (sama dengan aturan backend). */
-function applyCall(rows: Visit[], id: number): Visit[] {
-  const ordered = [...rows].sort((a, b) => (a.queue_no ?? 0) - (b.queue_no ?? 0) || a.id - b.id)
-  const next = ordered.map((v): Visit => v.state === 'selesai' ? v : { ...v, state: v.id === id ? 'saat_ini' : 'menunggu' })
-  const current = next.findIndex((v) => v.state === 'saat_ini')
-  const after = next.slice(current + 1).find((v) => v.state === 'menunggu') || next.find((v) => v.state === 'menunggu')
-  return next.map((v) => v === after ? { ...v, state: 'selanjutnya' } : v)
 }
 
 export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {

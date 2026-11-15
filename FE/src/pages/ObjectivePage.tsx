@@ -11,6 +11,19 @@ export const EXAM_PARTS = ['Kepala', 'Mata', 'Leher', 'Dada / Jantung', 'Paru', 
 const NORMAL = 'Dalam batas normal'
 const pairClass = `${inputClass.replace('w-full ', '')} font-inter w-[76px] flex-none`
 
+/** Hanya angka desimal: koma diubah ke titik, satu titik, batas digit bulat & desimal. */
+export function decimalOnly(raw: string, maxInt = 3, maxDec = 1) {
+  const [int = '', ...rest] = raw.replace(',', '.').replace(/[^\d.]/g, '').split('.')
+  const decimals = rest.join('')
+  return raw.match(/[.,]/) && maxDec > 0 ? `${int.slice(0, maxInt)}.${decimals.slice(0, maxDec)}` : int.slice(0, maxInt)
+}
+
+/** Hanya bilangan bulat, dengan batas panjang dan nilai maksimum. */
+export function integerOnly(raw: string, maxLen = 3, max?: number) {
+  const digits = raw.replace(/\D/g, '').slice(0, maxLen)
+  return max !== undefined && digits && Number(digits) > max ? String(max) : digits
+}
+
 type Wound = { name: string; location: string; p: string; l: string; d: string; description: string }
 type Support = { type: string; name: string; date: string; summary: string; source: string; note: string }
 export type ObjectiveState = {
@@ -100,13 +113,13 @@ export function ObjectivePage({ data }: { data: Consultation }) {
 
       <SectionLabel number="01">Tanda Vital</SectionLabel>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <FieldBox label="Berat Badan" htmlFor="bb"><UnitInput id="bb" inputMode="decimal" value={s.bb} onChange={(e) => set('bb', e.target.value)} placeholder="berat badan" unit="kg" /></FieldBox>
-        <FieldBox label="Tinggi Badan" htmlFor="tb"><UnitInput id="tb" inputMode="decimal" value={s.tb} onChange={(e) => set('tb', e.target.value)} placeholder="tinggi badan" unit="cm" /></FieldBox>
-        <FieldBox label="Suhu" htmlFor="suhu"><UnitInput id="suhu" inputMode="decimal" value={s.suhu} onChange={(e) => set('suhu', e.target.value)} placeholder="36" unit="°C" /></FieldBox>
-        <FieldBox label="Nadi" htmlFor="nadi"><UnitInput id="nadi" inputMode="numeric" value={s.nadi} onChange={(e) => set('nadi', e.target.value)} placeholder="nadi" unit="/menit" /></FieldBox>
-        <FieldBox label="Tekanan Darah" htmlFor="sistolik"><div className="flex items-center gap-2"><input id="sistolik" aria-label="Sistolik" inputMode="numeric" className={pairClass} value={s.sistolik} onChange={(e) => set('sistolik', e.target.value)} placeholder="110" /><b className="text-[#72869a]">/</b><input aria-label="Diastolik" inputMode="numeric" className={pairClass} value={s.diastolik} onChange={(e) => set('diastolik', e.target.value)} placeholder="80" /><span className="text-[11px] text-[#8799ad]">mmHg</span></div></FieldBox>
-        <FieldBox label="Frekuensi Pernapasan" htmlFor="rr"><UnitInput id="rr" inputMode="numeric" value={s.rr} onChange={(e) => set('rr', e.target.value)} placeholder="20" unit="/menit" /></FieldBox>
-        <FieldBox label={<>SpO<sub>2</sub></>} htmlFor="spo2"><UnitInput id="spo2" inputMode="numeric" value={s.spo2} onChange={(e) => set('spo2', e.target.value)} placeholder="98" unit="%" /></FieldBox>
+        <FieldBox label="Berat Badan" htmlFor="bb"><UnitInput id="bb" inputMode="decimal" value={s.bb} onChange={(e) => set('bb', decimalOnly(e.target.value, 3, 1))} placeholder="berat badan" unit="kg" /></FieldBox>
+        <FieldBox label="Tinggi Badan" htmlFor="tb"><UnitInput id="tb" inputMode="decimal" value={s.tb} onChange={(e) => set('tb', decimalOnly(e.target.value, 3, 1))} placeholder="tinggi badan" unit="cm" /></FieldBox>
+        <FieldBox label="Suhu" htmlFor="suhu"><UnitInput id="suhu" inputMode="decimal" value={s.suhu} onChange={(e) => set('suhu', decimalOnly(e.target.value, 2, 1))} placeholder="36" unit="°C" /></FieldBox>
+        <FieldBox label="Nadi" htmlFor="nadi"><UnitInput id="nadi" inputMode="numeric" value={s.nadi} onChange={(e) => set('nadi', integerOnly(e.target.value, 3))} placeholder="nadi" unit="/menit" /></FieldBox>
+        <FieldBox label="Tekanan Darah" htmlFor="sistolik"><div className="flex items-center gap-2"><input id="sistolik" aria-label="Sistolik" inputMode="numeric" className={pairClass} value={s.sistolik} onChange={(e) => set('sistolik', integerOnly(e.target.value, 3))} placeholder="110" /><b className="text-[#72869a]">/</b><input aria-label="Diastolik" inputMode="numeric" className={pairClass} value={s.diastolik} onChange={(e) => set('diastolik', integerOnly(e.target.value, 3))} placeholder="80" /><span className="text-[11px] text-[#8799ad]">mmHg</span></div></FieldBox>
+        <FieldBox label="Frekuensi Pernapasan" htmlFor="rr"><UnitInput id="rr" inputMode="numeric" value={s.rr} onChange={(e) => set('rr', integerOnly(e.target.value, 3))} placeholder="20" unit="/menit" /></FieldBox>
+        <FieldBox label={<>SpO<sub>2</sub></>} htmlFor="spo2"><UnitInput id="spo2" inputMode="numeric" value={s.spo2} onChange={(e) => set('spo2', integerOnly(e.target.value, 3, 100))} placeholder="98" unit="%" /></FieldBox>
       </div>
 
       <SectionLabel number="02">Keadaan Umum, Neurologis &amp; Nyeri</SectionLabel>
@@ -115,10 +128,10 @@ export function ObjectivePage({ data }: { data: Consultation }) {
         <FieldBox label="GCS (E–V–M)" htmlFor="gcs"><UnitInput id="gcs" value={s.gcs} onChange={(e) => set('gcs', e.target.value)} placeholder="15 (E4 V5 M6)" unit="GCS" /></FieldBox>
         <FieldBox label="Irama Nadi" htmlFor="irama"><SelectInput id="irama" value={s.irama} onChange={(e) => set('irama', e.target.value)}><option value="">Pilih irama</option><option>Teratur</option><option>Tidak teratur</option></SelectInput></FieldBox>
         <FieldBox label="Keadaan Umum" htmlFor="keadaan"><input id="keadaan" className={`${inputClass} font-inter`} value={s.keadaan} onChange={(e) => set('keadaan', e.target.value)} placeholder="Baik" /></FieldBox>
-        <FieldBox label="Pupil (kanan / kiri)"><div className="flex items-center gap-2"><input aria-label="Pupil kanan" inputMode="decimal" className={pairClass} value={s.pupil_ka} onChange={(e) => set('pupil_ka', e.target.value)} placeholder="3" /><b className="text-[#72869a]">/</b><input aria-label="Pupil kiri" inputMode="decimal" className={pairClass} value={s.pupil_ki} onChange={(e) => set('pupil_ki', e.target.value)} placeholder="3" /><span className="text-[11px] text-[#8799ad]">mm</span></div></FieldBox>
-        <FieldBox label="Refleks Cahaya (kanan / kiri)"><div className="flex items-center gap-2"><SelectInput aria-label="Refleks cahaya kanan" className="w-[86px]" value={s.refleks_ka} onChange={(e) => set('refleks_ka', e.target.value)}><option value="">-</option><option>+</option><option>−</option></SelectInput><b className="text-[#72869a]">/</b><SelectInput aria-label="Refleks cahaya kiri" className="w-[86px]" value={s.refleks_ki} onChange={(e) => set('refleks_ki', e.target.value)}><option value="">-</option><option>+</option><option>−</option></SelectInput></div></FieldBox>
+        <FieldBox label="Pupil (kanan / kiri)"><div className="flex items-center gap-2"><input aria-label="Pupil kanan" inputMode="decimal" className={pairClass} value={s.pupil_ka} onChange={(e) => set('pupil_ka', decimalOnly(e.target.value, 1, 1))} placeholder="3" /><b className="text-[#72869a]">/</b><input aria-label="Pupil kiri" inputMode="decimal" className={pairClass} value={s.pupil_ki} onChange={(e) => set('pupil_ki', decimalOnly(e.target.value, 1, 1))} placeholder="3" /><span className="text-[11px] text-[#8799ad]">mm</span></div></FieldBox>
+        <FieldBox label="Refleks Cahaya (kanan / kiri)"><div className="flex items-center gap-2"><ReflexSelect label="Refleks cahaya kanan" value={s.refleks_ka} onChange={(v) => set('refleks_ka', v)} /><b className="text-[#72869a]">/</b><ReflexSelect label="Refleks cahaya kiri" value={s.refleks_ki} onChange={(v) => set('refleks_ki', v)} /></div></FieldBox>
         <FieldBox label="Skrining Nyeri"><div className="flex h-10 items-center gap-5 rounded-[10px] border border-[#d2e1e7] bg-white px-3"><Radio name="nyeri" label="Tidak" checked={s.nyeri === 'tidak'} onChange={() => set('nyeri', 'tidak')} /><Radio name="nyeri" label="Ya" checked={s.nyeri === 'ya'} onChange={() => set('nyeri', 'ya')} /></div></FieldBox>
-        <FieldBox label="Skala Nyeri" htmlFor="skala"><UnitInput id="skala" inputMode="numeric" disabled={s.nyeri !== 'ya'} value={s.skala_nyeri} onChange={(e) => set('skala_nyeri', e.target.value)} placeholder="0–10" unit="/10" /></FieldBox>
+        <FieldBox label="Skala Nyeri" htmlFor="skala"><UnitInput id="skala" inputMode="numeric" disabled={s.nyeri !== 'ya'} value={s.skala_nyeri} onChange={(e) => set('skala_nyeri', integerOnly(e.target.value, 2, 10))} placeholder="0–10" unit="/10" /></FieldBox>
         <FieldBox label="Lokasi Nyeri" htmlFor="lokasi"><input id="lokasi" disabled={s.nyeri !== 'ya'} className={`${inputClass} font-inter`} value={s.lokasi_nyeri} onChange={(e) => set('lokasi_nyeri', e.target.value)} placeholder="Contoh: kepala" /></FieldBox>
       </div>
 
@@ -146,7 +159,7 @@ export function ObjectivePage({ data }: { data: Consultation }) {
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <div><Label>Lokasi luka</Label><input className={inputClass} value={w.location} onChange={(e) => patch({ location: e.target.value })} placeholder="Contoh: tungkai kanan bawah" /></div>
-              <div><Label>Ukuran luka (P × L × D)</Label><div className="flex items-center gap-2">{(['p', 'l', 'd'] as const).map((k, i) => <span key={k} className="contents"><UnitInput aria-label={['Panjang', 'Lebar', 'Kedalaman'][i]} inputMode="decimal" value={w[k]} onChange={(e) => patch({ [k]: e.target.value })} unit="cm" />{i < 2 && <b className="text-[#72869a]">×</b>}</span>)}</div></div>
+              <div><Label>Ukuran luka (P × L × D)</Label><div className="flex items-center gap-2">{(['p', 'l', 'd'] as const).map((k, i) => <span key={k} className="contents"><UnitInput aria-label={['Panjang', 'Lebar', 'Kedalaman'][i]} inputMode="decimal" value={w[k]} onChange={(e) => patch({ [k]: decimalOnly(e.target.value, 3, 1) })} unit="cm" />{i < 2 && <b className="text-[#72869a]">×</b>}</span>)}</div></div>
             </div>
             <div className="mt-3"><Label>Pengkajian / deskripsi luka</Label><TextArea rows={3} value={w.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Catat kondisi luka, jaringan, eksudat, dan kulit sekitar" /></div>
           </div>
@@ -182,4 +195,13 @@ export function ObjectivePage({ data }: { data: Consultation }) {
       <div className="flex gap-3"><button type="button" className={btn.outline} disabled={busy} onClick={() => save(false)}>Simpan Draf</button><button type="button" disabled={busy} onClick={() => save(true)} className={btn.primary}>Lanjut ke Asesmen &amp; Plan <ArrowRight className="size-4" /></button></div>
     </div>
   </div>
+}
+
+/** Refleks cahaya: "Pilih", "+ Positif", "− Negatif" — latar putih tanpa warna, lebar cukup untuk teks penuh. */
+function ReflexSelect({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return <SelectInput aria-label={label} className="w-[132px]" value={value} onChange={(e) => onChange(e.target.value)}>
+    <option value="">Pilih</option>
+    <option value="+">+ Positif</option>
+    <option value="−">− Negatif</option>
+  </SelectInput>
 }
