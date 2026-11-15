@@ -1,16 +1,17 @@
-# React + Vite
+# ComeHear Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Fondasi React + TypeScript dengan Vite, Tailwind CSS, shadcn/ui, React Router, dan TanStack Query.
 
-Currently, two official plugins are available:
+## Jalankan lokal
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Di `BE/`, buat `.env` dari `.env.example`, lalu set `LLM_PROVIDERS=mock` dan `SATUSEHAT_MODE=mock`.
+2. Jalankan backend: `.venv/Scripts/python -m uvicorn app.main:app --port 8000`.
+3. Di `FE/`, jalankan `pnpm install` lalu `pnpm dev`.
+4. Buka alamat Vite yang tercetak di terminal. Masuk sebagai dokter dengan `rian@rumahsakit.id` dan kata sandi `DEMO_PASSWORD` dari `BE/.env`.
+5. Halaman Manajemen Kunjungan menampilkan antrean dari BE. Jika kosong, pilih **Isi antrean demo**.
 
-## React Compiler
+Alur dokter: **Antrean → Persetujuan/Rekam atau manual → Tinjau Subjektif → O-A-P → Tinjau & Sahkan → Resume**. Audio yang dihentikan dikirim ke BE untuk ASR; bila gagal, dokter dapat memasukkan transkrip cadangan. Mode `LLM_PROVIDERS=mock` dan `SATUSEHAT_MODE=mock` hanya untuk simulasi. Untuk mencoba rekaman sungguhan, atur `ASR_MODEL=small` di `BE/.env` dan pastikan model tersedia.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Vite meneruskan path `/api` ke `http://127.0.0.1:8000`. Route BE lama yang belum berawalan `/api` dipanggil melalui `/api/backend/*` dan dihapus prefiksnya oleh proxy Vite. Deployment produksi perlu aturan reverse proxy yang sama atau API BE yang diseragamkan.
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Perintah pemeriksaan: `pnpm build` dan `pnpm lint`.

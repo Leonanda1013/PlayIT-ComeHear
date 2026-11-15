@@ -61,6 +61,8 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
             else:
                 errors.append("Tekanan darah ditulis seperti 120/80.")
         note.vitals = vitals
+    if "exam_text" in form:
+        note.exam_text = (form.get("exam_text") or "").strip()
     extra = dict(note.extra or {})
     for k in EXTRA_FIELDS:
         if k in form:
@@ -107,5 +109,8 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
         parts.append(f"Diagnosis kerja: {note.diagnoses[0]['code']} {note.diagnoses[0]['display']}.")
     if (note.extra or {}).get("evaluasi"):
         parts.append(note.extra["evaluasi"])
-    note.assessment = " ".join(parts)
+    if "assessment_text" in form:
+        note.assessment = (form.get("assessment_text") or "").strip()
+    elif "dx_primary" in form or "evaluasi" in form:
+        note.assessment = " ".join(parts)
     return errors

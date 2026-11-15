@@ -300,10 +300,13 @@ def today_start_utc() -> datetime:
     return datetime.now(WIB).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
-def visit_state(v: Visit) -> str:
+def visit_state(v: Visit, active_id: int | None = None) -> str:
     if v.note and v.note.approved_snapshot:
         return "selesai"
-    if v.called_at:
+    if active_id is not None:
+        if v.id == active_id:
+            return "saat_ini"
+    elif v.called_at:
         return "saat_ini"
     return "menunggu"
 
@@ -325,14 +328,25 @@ def queue_api(request: Request, tab: str = "semua", q: str = "", user: User = De
     loc = current_location(request, db)
     visits = db.scalars(select(Visit).where(Visit.location_id == loc.id, Visit.arrived_at >= today_start_utc())
                         .order_by(Visit.queue_no, Visit.id)).all()
-    rows = [{"v": v, "state": visit_state(v)} for v in visits]
-    nxt = next((r for r in rows if r["state"] == "menunggu"), None)
+    # Pastikan hanya ada tepat 1 pasien aktif ("saat_ini"): pasien belum selesai dengan called_at paling baru
+    active_candidates = [
+        v for v in visits if v.called_at and not (v.note and v.note.approved_snapshot)
+    ]
+    active_id = max(active_candidates, key=lambda v: v.called_at).id if active_candidates else None
+
+    rows = [{"v": v, "state": visit_state(v, active_id)} for v in visits]
+    active_idx = next((i for i, r in enumerate(rows) if r["state"] == "saat_ini"), -1)
+    nxt = None
+    if active_idx != -1:
+        nxt = next((r for r in rows[active_idx + 1:] if r["state"] == "menunggu"), None)
+    if not nxt:
+        nxt = next((r for r in rows if r["state"] == "menunggu"), None)
     if nxt:
         nxt["state"] = "selanjutnya"
-    order = {"saat_ini": 0, "selanjutnya": 1, "menunggu": 2, "selesai": 3}
-    rows.sort(key=lambda r: (order[r["state"]], r["v"].queue_no or 0))
+
     for r in rows:
         r["draft"] = draft_label(r["v"], r["state"])
+    order = {"saat_ini": 0, "selanjutnya": 1, "menunggu": 2, "selesai": 3}
     counts = {k: sum(r["state"] == k for r in rows) for k in order}
     counts["semua"] = len(rows)
     if tab != "semua":
@@ -357,6 +371,17 @@ def queue_api(request: Request, tab: str = "semua", q: str = "", user: User = De
 @app.post("/visits/{visit_id}/panggil")
 def call_patient(visit_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
+    # Kembalikan pasien lain di bilik/lokasi yang belum selesai diperiksa ke status "menunggu"
+    other_active = db.scalars(
+        select(Visit).where(
+            Visit.location_id == v.location_id,
+            Visit.id != v.id,
+            Visit.called_at.is_not(None)
+        )
+    ).all()
+    for other in other_active:
+        if not (other.note and other.note.approved_snapshot):
+            other.called_at = None
     v.called_at = utcnow()
     audit(db, user, "panggil", f"visit:{v.id}")
     db.commit()
@@ -426,6 +451,7 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "subjective": note.subjective or {},
             "subjective_summary": note.subjective_summary or "",
             "vitals": note.vitals or {},
+            "exam_text": note.exam_text or "",
             "diagnoses": note.diagnoses or [],
             "plan_text": note.plan_text or "",
             "prescriptions": note.prescriptions or [],
@@ -744,6 +770,7 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
     sub = v.latest_submission
     return {
         "status": "ok",
+        "mode": settings.satusehat_mode,
         "visit": {
             "id": v.id,
             "code": v.code,
@@ -757,6 +784,7 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
             "subjective_summary": v.note.subjective_summary if v.note else "",
             "subjective": v.note.subjective if v.note else {},
             "vitals": v.note.vitals if v.note else {},
+            "exam_text": v.note.exam_text if v.note else "",
             "diagnoses": v.note.diagnoses if v.note else [],
             "plan_text": v.note.plan_text if v.note else "",
             "prescriptions": v.note.prescriptions if v.note else [],
