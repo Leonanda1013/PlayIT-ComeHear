@@ -56,8 +56,13 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: { user: User; o
   useEffect(() => { if (expired) onSessionExpired() }, [expired, onSessionExpired])
   if (expired) return <LoadingState label="Sesi berakhir…" />
 
-  const rows = queue.data?.rows || []
+  const rawRows = queue.data?.rows || []
   const counts = queue.data?.counts || {}
+  const rows = [...rawRows].sort((a, b) => {
+    const qA = a.queue_no ?? (a as { queue_number?: number }).queue_number ?? 0
+    const qB = b.queue_no ?? (b as { queue_number?: number }).queue_number ?? 0
+    return qA !== qB ? qA - qB : a.id - b.id
+  })
   const activeId = rows.find((row) => row.state === 'saat_ini')?.id
 
   return (
@@ -81,16 +86,38 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: { user: User; o
         {queue.isPending ? <LoadingState label="Memuat antrean…" /> : queue.isError ? <ErrorState message={queue.error.message} onRetry={() => queue.refetch()} /> : rows.length === 0 ? <EmptyState title={search ? 'Pasien tidak ditemukan' : 'Belum ada kunjungan'} description={search ? 'Periksa nama atau nomor RM.' : 'Isi data simulasi untuk mencoba alur dokter.'} action={!search && tab === 'semua' ? <Button onClick={() => seed.mutate()}>Isi antrean demo</Button> : undefined} /> : (
           <div className="overflow-x-auto">
             <div className="min-w-[800px] divide-y divide-[#d7e5ea]">
-              {rows.map((visit) => {
-                const current = visit.id === activeId
-                const canCall = visit.state === 'selanjutnya' || visit.state === 'menunggu'
-                return <article key={visit.id} className={`relative grid grid-cols-[52px_150px_minmax(280px,1fr)_170px_170px] items-center px-4 py-4 text-sm ${current ? 'my-0.5 min-h-[112px] rounded-2xl border-2 border-[#0ea5b7] bg-white shadow-[0_4px_0_#b5e7ed]' : 'min-h-[66px]'}`}>
-                  <span className="font-bold text-[#142a40]">{String(visit.queue_no ?? 0).padStart(3, '0')}</span>
+              {rows.map((visit, index) => {
+                const current = visit.state === 'saat_ini' || visit.id === activeId
+                const canCall = visit.state === 'selanjutnya'
+                const isDraftSaved = visit.state === 'selesai' || visit.has_note || visit.draft_status === 'Tersimpan' || visit.draft_status === 'Draf tersimpan'
+                const prevWasCurrent = index > 0 && (rows[index - 1].state === 'saat_ini' || rows[index - 1].id === activeId)
+                return <article key={visit.id} className={`relative grid grid-cols-[52px_150px_minmax(280px,1fr)_170px_170px] items-center px-4 py-4 text-sm ${current ? 'my-1 min-h-[112px] rounded-2xl !border-2 !border-[#0ea5b7] bg-white shadow-[0_4px_0_#b5e7ed] z-10' : `min-h-[66px] ${prevWasCurrent ? '!border-t-0' : ''}`}`}>
+                  <span className="font-bold text-[#142a40]">{String(visit.queue_no ?? (visit as { queue_number?: number }).queue_number ?? 0).padStart(3, '0')}</span>
                   <StatusPill visit={visit} />
                   <div className="min-w-0 pr-4"><p className="truncate font-bold text-[#102a43]">{visit.patient.name}</p><p className="mt-0.5 truncate text-xs text-[#516575]">{patientMeta(visit)}</p></div>
-                  <span className={`w-fit rounded-full border px-2.5 py-1 text-[11px] font-semibold ${visit.has_note ? 'border-[#a7dfca] bg-[#e6f7ef] text-[#157153]' : 'border-[#cad9e3] bg-[#edf3f6] text-[#52697d]'}`}>{visit.has_note ? 'Tersimpan' : 'Belum ada draf'}</span>
+                  <span className={`w-fit rounded-full border px-2.5 py-1 text-[11px] font-semibold ${isDraftSaved ? 'border-[#a7dfca] bg-[#e6f7ef] text-[#157153]' : 'border-[#cad9e3] bg-[#edf3f6] text-[#52697d]'}`}>{isDraftSaved ? 'Tersimpan' : 'Belum ada draf'}</span>
                   <div className="flex items-center justify-center gap-2">
-                    {visit.state === 'selesai' ? <><Button asChild variant="outline" className="h-8 rounded-lg border-[#76d8e6] px-3 text-xs text-[#0791a5]"><Link to={`/kunjungan/${visit.id}/resume`}><Eye className="size-3.5" /> Lihat Resume</Link></Button><MoreVertical className="size-4 text-[#506473]" /></> : current ? <div className="grid gap-2"><Button variant="outline" className="h-9 rounded-lg px-5 text-xs" onClick={() => call.mutate(visit.id)} disabled={call.isPending}><Megaphone className="size-4 text-[#0ea5b7]" /> Panggil</Button><Button asChild className="h-9 rounded-lg bg-[#14a2b5] px-5 text-xs text-white hover:bg-[#0c8fa1]"><Link to={`/kunjungan/${visit.id}/subjektif`}>Isi SOAP <ArrowRight className="size-4" /></Link></Button></div> : <Button variant="outline" className="h-9 rounded-lg border-[#75d6e3] px-4 text-xs font-semibold text-[#078fa3] disabled:text-[#b9cad5]" disabled={!canCall || call.isPending} onClick={() => call.mutate(visit.id)}>Panggil</Button>}
+                    {visit.state === 'selesai' ? (
+                      <>
+                        <Button asChild variant="outline" className="h-8 rounded-lg border-[#76d8e6] px-3 text-xs text-[#0791a5] hover:bg-[#eaf8f9]">
+                          <Link to={`/kunjungan/${visit.id}/resume`}><Eye className="size-3.5" /> Lihat Resume</Link>
+                        </Button>
+                        <MoreVertical className="size-4 text-[#506473]" />
+                      </>
+                    ) : current ? (
+                      <div className="grid gap-2">
+                        <Button variant="outline" className="h-9 rounded-lg border-[#d2e1e7] px-5 text-xs font-semibold text-[#102a43] hover:bg-[#f0f7f9] flex items-center justify-center gap-1.5" onClick={() => call.mutate(visit.id)} disabled={call.isPending}>
+                          Panggil <Megaphone className="size-4 text-[#0ea5b7]" />
+                        </Button>
+                        <Button asChild className="h-9 rounded-lg bg-[#14a2b5] px-5 text-xs font-semibold text-white hover:bg-[#0c8fa1] flex items-center justify-center gap-1.5">
+                          <Link to={`/kunjungan/${visit.id}/subjektif`}>Isi SOAP <ArrowRight className="size-4" /></Link>
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button variant="outline" className={`h-9 rounded-lg px-4 text-xs font-semibold ${canCall ? 'border-[#75d6e3] text-[#078fa3] hover:bg-[#e6f7fa]' : 'border-[#d8e2e7] text-[#b9cad5] bg-transparent opacity-60 cursor-not-allowed'}`} disabled={!canCall || call.isPending} onClick={() => call.mutate(visit.id)}>
+                        Panggil
+                      </Button>
+                    )}
                   </div>
                 </article>
               })}
