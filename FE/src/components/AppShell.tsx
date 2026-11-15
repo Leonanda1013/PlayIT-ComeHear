@@ -61,8 +61,8 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
   }
 
   return (
-    <div className="min-h-screen bg-ch-bg lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
-      <aside className="z-30 flex flex-col border-b border-[#d3e2e8] bg-[#f6fafb] lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r">
+    <div className="min-h-screen bg-ch-bg lg:grid lg:grid-cols-[288px_minmax(0,1fr)] print:block print:min-h-0 print:bg-white">
+      <aside className="z-30 flex flex-col border-b border-[#d3e2e8] bg-[#f6fafb] lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r print:hidden">
         <div className="flex h-[71px] shrink-0 items-center justify-between border-b border-[#d3e2e8] px-6 lg:justify-center">
           <img src="/comehear-logo.png" alt="ComeHear AI Medical Scribe" className="h-[44px] w-[190px] object-contain" />
           <button type="button" className="grid size-9 place-items-center rounded-lg text-ch-muted hover:bg-[#e6f1f4] lg:hidden" aria-label={menuOpen ? 'Tutup menu' : 'Buka menu'} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}</button>
@@ -93,8 +93,8 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
         </div>
       </aside>
 
-      <div className="min-w-0 lg:col-start-2">
-        <header className="sticky top-0 z-20 flex min-h-[71px] flex-wrap items-center justify-between gap-3 border-b border-[#d3e2e8] bg-[#f6fafb]/95 px-6 py-2.5 backdrop-blur">
+      <div className="min-w-0 lg:col-start-2 print:col-start-auto">
+        <header className="sticky top-0 z-20 flex min-h-[71px] flex-wrap items-center justify-between gap-3 border-b border-[#d3e2e8] bg-[#f6fafb]/95 px-6 py-2.5 backdrop-blur print:hidden">
           <div><p className="text-[11px] font-semibold text-[#0b8597]">{subtitle ?? poli}</p><p className="text-[16px] font-bold leading-5 text-ch-ink">{title ?? room}</p></div>
           <div className="flex items-center gap-2 text-[13px] text-ch-ink">
             <div className="relative hidden sm:block">
@@ -111,7 +111,7 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
             </div>
           </div>
         </header>
-        <main className="mx-auto max-w-[1180px] p-4 sm:p-6">{children}</main>
+        <main className="mx-auto max-w-[1180px] p-4 sm:p-6 print:max-w-none print:p-0 print:m-0">{children}</main>
       </div>
 
       <Dialog open={confirmLogout} onClose={() => setConfirmLogout(false)} title="Keluar dari akun?">

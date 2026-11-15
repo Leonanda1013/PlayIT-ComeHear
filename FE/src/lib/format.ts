@@ -63,3 +63,110 @@ export const rmStatusMeta: Record<string, { label: string; tone: 'info' | 'muted
   dalam_pemeriksaan: { label: 'Dalam Pemeriksaan', tone: 'blue' },
   selesai: { label: 'Selesai', tone: 'ok' },
 }
+
+/**
+ * Format nama file ekspor dokumen ComeHear sesuai standar administrasi rekam medis:
+ * ComeHear_NoRM_YYYYMMDD_JenisDokumen(.pdf)
+ * 
+ * Contoh: ComeHear_2026-9041_20261115_ResumeMedis.pdf
+ */
+export function formatExportFileName({
+  rmNumber,
+  visitDate,
+  visitCode,
+  docType = 'ResumeMedis',
+  extension = '',
+}: {
+  rmNumber?: string | null
+  visitDate?: string | Date | null
+  visitCode?: string | null
+  docType?: string
+  extension?: string
+}): string {
+  // 1. Sanitasi Nomor RM dari karakter tidak valid pada nama file
+  const rawRm = (rmNumber || 'UNKNOWN').trim()
+  const cleanRm = rawRm
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '')
+    .replace(/^-+|-+$/g, '') || 'RM'
+
+  // 2. Ekstraksi tanggal kunjungan pasien (YYYYMMDD) berbasis tanggal kunjungan, bukan waktu unduh
+  let yyyymmdd = ''
+
+  if (visitDate) {
+    const d = typeof visitDate === 'string' ? new Date(visitDate.length === 10 ? `${visitDate}T00:00:00` : visitDate) : visitDate
+    if (!Number.isNaN(d.getTime())) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: TZ,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(d)
+      const y = parts.find((p) => p.type === 'year')?.value || ''
+      const m = parts.find((p) => p.type === 'month')?.value || ''
+      const day = parts.find((p) => p.type === 'day')?.value || ''
+      if (y && m && day) {
+        yyyymmdd = `${y}${m}${day}`
+      }
+    }
+  }
+
+  // Jika belum dapat, ekstraksi tanggal dari visitCode (misal format "2026/11/15/0008")
+  if (!yyyymmdd && visitCode) {
+    const codeMatch = visitCode.match(/(\d{4})[/-](\d{2})[/-](\d{2})/)
+    if (codeMatch) {
+      yyyymmdd = `${codeMatch[1]}${codeMatch[2]}${codeMatch[3]}`
+    }
+  }
+
+  // Fallback jika tidak ada info tanggal kunjungan
+  if (!yyyymmdd) {
+    const now = new Date()
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now)
+    yyyymmdd = `${parts.find((p) => p.type === 'year')?.value || ''}${parts.find((p) => p.type === 'month')?.value || ''}${parts.find((p) => p.type === 'day')?.value || ''}`
+  }
+
+  // 3. Sanitasi jenis dokumen
+  const cleanDocType = (docType || 'Dokumen')
+    .trim()
+    .replace(/[\\/:*?"<>|\s]+/g, '')
+
+  const ext = extension ? (extension.startsWith('.') ? extension : `.${extension}`) : ''
+  return `ComeHear_${cleanRm}_${yyyymmdd}_${cleanDocType}${ext}`
+}
+
+/**
+ * Mencetak dokumen dengan mengatur judul dokumen (document.title) otomatis
+ * agar nama file default saat simpan/ekspor PDF sesuai format ComeHear.
+ */
+export function printResumeDocument(params: {
+  rmNumber?: string | null
+  visitDate?: string | Date | null
+  visitCode?: string | null
+  docType?: string
+}) {
+  const originalTitle = document.title
+  const targetTitle = formatExportFileName(params)
+
+  document.title = targetTitle
+
+  const restore = () => {
+    document.title = originalTitle
+    window.removeEventListener('afterprint', restore)
+  }
+  window.addEventListener('afterprint', restore)
+
+  try {
+    window.print()
+  } finally {
+    setTimeout(() => {
+      document.title = originalTitle
+    }, 1500)
+  }
+}
+
