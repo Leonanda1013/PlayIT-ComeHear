@@ -183,3 +183,26 @@ html, body { font-family: var(--font-jakarta); color: var(--color-ch-ink); backg
 /* Scrollbar disembunyikan; konten tetap bisa digulir dengan roda mouse, trackpad, atau sentuhan. */
 * { scrollbar-width: none; -ms-overflow-style: none; }
 *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 15mm 12mm 15mm;
+  }
+
+  html,
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11px !important;
+    line-height: 1.4 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
+

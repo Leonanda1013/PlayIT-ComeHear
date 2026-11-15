@@ -7,9 +7,10 @@ import { AppShell } from '@/components/AppShell'
 import { PageTitle, PatientIdentity } from '@/components/ClinicalHeader'
 import { EmptyState, ErrorState, LoadingState } from '@/components/Feedback'
 import { SoapSummary } from '@/components/SoapSummary'
+import { OfficialResumePrint } from '@/components/OfficialResumePrint'
 import { Badge, Panel } from '@/components/ui/kit'
 import { getConsultation, getResume, getScribe, visitPath } from '@/lib/clinical'
-import { dateShort, mmss, submissionMeta, timeWib } from '@/lib/format'
+import { dateShort, formatExportFileName, mmss, printResumeDocument, submissionMeta, timeWib } from '@/lib/format'
 import { getHistory } from '@/lib/rm'
 import type { HistoryVisit } from '@/lib/types'
 
@@ -93,12 +94,33 @@ export function HistoryDetailPage({ user, onLogout, base }: SessionProps & { bas
   const [filters, setFilters] = useState<Filters>({ range: '', poli: '', status: '' })
   const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: id > 0 })
   const patient = consultation.data?.visit.patient
+
+  useEffect(() => {
+    if (consultation.data) {
+      const v = consultation.data.visit
+      const p = v.patient
+      document.title = formatExportFileName({
+        rmNumber: p.rm_number,
+        visitDate: v.arrived_at || v.called_at || v.started_at,
+        visitCode: v.code,
+        docType: 'ResumeMedis',
+      })
+      return () => {
+        document.title = 'ComeHear'
+      }
+    }
+  }, [consultation.data])
+
   return <AppShell user={user} onLogout={onLogout} title={consultation.data ? `${consultation.data.visit.location.poli || 'Poli'} / ${consultation.data.visit.location.name}` : undefined}>
-    <PageTitle title="Riwayat Pasien" back={base} />
-    {patient && <SearchFilters search={`${patient.name} / ${patient.rm_number}`} setSearch={() => navigate(base)} filters={filters} setFilters={setFilters} polis={[]} onReset={() => navigate(base)} onClear={() => navigate(base)} />}
-    <div className="mt-4 space-y-4">
+    <div className="print:hidden">
+      <PageTitle title="Riwayat Pasien" back={base} />
+      {patient && <SearchFilters search={`${patient.name} / ${patient.rm_number}`} setSearch={() => navigate(base)} filters={filters} setFilters={setFilters} polis={[]} onReset={() => navigate(base)} onClear={() => navigate(base)} />}
+    </div>
+    <div className="mt-4 space-y-4 print:mt-0 print:space-y-0">
       {consultation.isPending ? <LoadingState label="Memuat rekam medis…" /> : consultation.isError ? <ErrorState message={consultation.error.message} onRetry={() => consultation.refetch()} /> : <>
-        <PatientIdentity patient={consultation.data.visit.patient} />
+        <div className="print:hidden">
+          <PatientIdentity patient={consultation.data.visit.patient} />
+        </div>
         <RecordSummary id={id} />
       </>}
     </div>
@@ -118,26 +140,40 @@ export function RecordSummary({ id }: { id: number }) {
   const meta = submissionMeta(sub?.status, data.locked)
   const snapshot = data.note.approved_snapshot as { approved_at?: string } | null
 
-  return <Panel className="print:border-0">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="text-[20px] font-bold">Ringkasan Rekam Medis</h2><p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-ch-muted">{data.visit.code} · {snapshot?.approved_at ? `Divalidasi ${dateShort(snapshot.approved_at)} ${timeWib(snapshot.approved_at)}` : 'Belum divalidasi dokter'} <Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></p></div>
-      <button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-[13px] font-semibold hover:border-ch-brand print:hidden"><Printer className="size-4 text-ch-teal" /> Cetak Resume</button>
+  const handlePrint = () => {
+    printResumeDocument({
+      rmNumber: data.visit.patient.rm_number,
+      visitDate: data.visit.arrived_at || data.visit.called_at || data.visit.started_at,
+      visitCode: data.visit.code,
+      docType: 'ResumeMedis',
+    })
+  }
+
+  return <>
+    <Panel className="print:hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="text-[20px] font-bold">Ringkasan Rekam Medis</h2><p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-ch-muted">{data.visit.code} · {snapshot?.approved_at ? `Divalidasi ${dateShort(snapshot.approved_at)} ${timeWib(snapshot.approved_at)}` : 'Belum divalidasi dokter'} <Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></p></div>
+        <button type="button" onClick={handlePrint} className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-[13px] font-semibold hover:border-ch-brand print:hidden"><Printer className="size-4 text-ch-teal" /> Cetak Resume</button>
+      </div>
+      <div role="tablist" className="mt-4 flex gap-6 border-b border-[#dde8ec] px-2 print:hidden">
+        {[['soap', 'Ringkasan SOAP'], ['audio', `Transkrip & Rekaman Audio${duration ? ` (${mmss(duration)})` : ''}`]].map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key as 'soap' | 'audio')} className={`-mb-px border-b-2 pb-2 text-xs font-semibold ${tab === key ? 'border-ch-brand text-ch-teal' : 'border-transparent text-ch-muted hover:text-ch-ink'}`}>{label}</button>)}
+      </div>
+      <div className="mt-5">
+        {tab === 'soap' ? <SoapSummary note={data.note} variant="compact" aiDraft={!!data.session} /> : <div className="space-y-4">
+          <AudioPlayer src={data.session?.has_audio ? visitPath(id, `/audio/${data.session.id}`) : null} duration={duration} />
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-bold">Transkrip Percakapan</h3><p className="text-[11px] text-ch-muted">Transkrip sesi · Pasien: {data.visit.patient.name}</p></div>
+            {(scribe.data?.transcript || data.session?.transcript || []).length ? <div className="mt-3 divide-y divide-[#edf2f5]">
+              {(scribe.data?.transcript || data.session?.transcript || []).map((seg, i) => <div key={i} className="grid grid-cols-[70px_1fr] gap-3 py-2.5 text-[13px]"><b className={seg.speaker === 'doctor' ? 'text-ch-teal' : 'text-ch-ink'}>{seg.speaker === 'doctor' ? 'Dokter' : seg.speaker === 'guardian' ? 'Pendamping' : 'Pasien'}</b><p className="leading-5">{seg.text}</p></div>)}
+            </div> : <p className="mt-3 rounded-[10px] bg-[#f1f6f8] p-3 text-xs text-ch-muted">Kunjungan ini dicatat manual atau tidak memiliki transkrip.</p>}
+          </div>
+        </div>}
+      </div>
+    </Panel>
+    <div className="hidden print:block">
+      <OfficialResumePrint consultation={data} resume={resume.data} />
     </div>
-    <div role="tablist" className="mt-4 flex gap-6 border-b border-[#dde8ec] px-2 print:hidden">
-      {[['soap', 'Ringkasan SOAP'], ['audio', `Transkrip & Rekaman Audio${duration ? ` (${mmss(duration)})` : ''}`]].map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key as 'soap' | 'audio')} className={`-mb-px border-b-2 pb-2 text-xs font-semibold ${tab === key ? 'border-ch-brand text-ch-teal' : 'border-transparent text-ch-muted hover:text-ch-ink'}`}>{label}</button>)}
-    </div>
-    <div className="mt-5">
-      {tab === 'soap' ? <SoapSummary note={data.note} variant="compact" aiDraft={!!data.session} /> : <div className="space-y-4">
-        <AudioPlayer src={data.session?.has_audio ? visitPath(id, `/audio/${data.session.id}`) : null} duration={duration} />
-        <div>
-          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-bold">Transkrip Percakapan</h3><p className="text-[11px] text-ch-muted">Transkrip sesi · Pasien: {data.visit.patient.name}</p></div>
-          {(scribe.data?.transcript || data.session?.transcript || []).length ? <div className="mt-3 divide-y divide-[#edf2f5]">
-            {(scribe.data?.transcript || data.session?.transcript || []).map((seg, i) => <div key={i} className="grid grid-cols-[70px_1fr] gap-3 py-2.5 text-[13px]"><b className={seg.speaker === 'doctor' ? 'text-ch-teal' : 'text-ch-ink'}>{seg.speaker === 'doctor' ? 'Dokter' : seg.speaker === 'guardian' ? 'Pendamping' : 'Pasien'}</b><p className="leading-5">{seg.text}</p></div>)}
-          </div> : <p className="mt-3 rounded-[10px] bg-[#f1f6f8] p-3 text-xs text-ch-muted">Kunjungan ini dicatat manual atau tidak memiliki transkrip.</p>}
-        </div>
-      </div>}
-    </div>
-  </Panel>
+  </>
 }
 
 function AudioPlayer({ src, duration }: { src: string | null; duration: number }) {

@@ -77,7 +77,7 @@ export type Consultation = {
   consent_version: string
   visit: {
     id: number; code: string; queue_no: number | null; status: string
-    arrived_at?: string | null; called_at?: string | null; started_at?: string | null; doctor?: string | null
+    arrived_at?: string | null; called_at?: string | null; started_at?: string | null; ended_at?: string | null; doctor?: string | null
     patient: Patient; location: LocationRef
     consent: { given_by_name: string; version: string; given_at: string } | null
   }
@@ -103,7 +103,7 @@ export type Submission = {
 
 export type Resume = {
   mode: 'mock' | 'sandbox' | string
-  visit: { id: number; code: string; status: string; patient: Patient; location: LocationRef; satusehat_encounter_id: string | null }
+  visit: { id: number; code: string; status: string; arrived_at?: string | null; patient: Patient; location: LocationRef; satusehat_encounter_id: string | null }
   note: ClinicalNote
   submission: Submission | null
 }
