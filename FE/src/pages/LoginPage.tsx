@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 
 export function LoginPage({ onLogin }: { onLogin: (email: string, password: string) => Promise<void> }) {
   const [params] = useSearchParams()
-  const [email, setEmail] = useState('rian@rumahsakit.id')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
@@ -38,7 +38,7 @@ export function LoginPage({ onLogin }: { onLogin: (email: string, password: stri
             <span className="relative mt-2 block"><LockKeyhole className="absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-[#0ba9bd]" /><input id="password" autoComplete="current-password" required type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} className="h-[52px] w-full rounded-xl border border-[#d5e1e8] bg-[#fbfdfe] pl-10 pr-11 text-sm font-normal text-[#102a43] outline-none placeholder:text-[#99abc0] focus:border-[#13a8bb] focus:ring-2 focus:ring-[#13a8bb]/15" placeholder="••••••••••" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 grid w-11 place-items-center text-[#92a5b9]" aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}>{showPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}</button></span>
           </label>
           <div className="flex justify-end"><button type="button" onClick={() => setShowHelp(!showHelp)} className="text-xs font-semibold text-[#0099ad] hover:underline">Lupa kata sandi?</button></div>
-          {showHelp && <p className="text-xs text-[#60758a]">Hubungi admin fasilitas untuk mengatur ulang akses akun.</p>}
+          {showHelp && <p className="text-xs text-[#60758a]">Hubungi admin fasilitas untuk mengatur ulang akses akun. Akun dokter diarahkan ke antrean pasien, akun petugas rekam medis ke dashboard.</p>}
           <Button type="submit" disabled={submitting} className="mt-1 h-[52px] w-full rounded-xl bg-[#17a5b7] text-sm font-bold text-white shadow-[0_8px_18px_rgba(23,165,183,0.24)] hover:bg-[#0e91a3]">{submitting ? 'Sedang masuk…' : 'Masuk'}</Button>
         </form>
       </section>

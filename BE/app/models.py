@@ -53,6 +53,8 @@ class Patient(Base):
     # Nomor IHS berbentuk teks (P0...), dicari sekali lewat NIK lalu disimpan.
     ihs_number: Mapped[str | None] = mapped_column(String(32))
     ihs_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    address: Mapped[str | None] = mapped_column(String(255))
 
 
 class Location(Base):
@@ -81,6 +83,10 @@ class Visit(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     satusehat_encounter_id: Mapped[str | None] = mapped_column(String(64))
+    # Diisi petugas rekam medis: Terjadwal -> (konfirmasi kedatangan) -> Menunggu Pemeriksaan.
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    visit_type: Mapped[str | None] = mapped_column(String(20))  # Baru | Kontrol
+    admin_note: Mapped[str | None] = mapped_column(Text)
 
     patient: Mapped[Patient] = relationship()
     practitioner: Mapped[Practitioner] = relationship()

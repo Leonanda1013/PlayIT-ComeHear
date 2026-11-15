@@ -3,6 +3,7 @@
 Setiap langkah hanya mengirim sebagian isian. Hanya kunci yang ADA di form yang diperbarui,
 supaya menyimpan O-A-P tidak menghapus S yang sedang disusun AI, dan sebaliknya.
 """
+import json
 import re
 
 from app.models import ClinicalNote, Visit
@@ -67,6 +68,17 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
     for k in EXTRA_FIELDS:
         if k in form:
             extra[k] = (form.get(k) or "").strip()
+    # Isian terstruktur layar O dan A-P (pemeriksaan fisik, luka, penunjang, tindakan, resep racikan, dll.)
+    # disimpan utuh agar bisa dibuka ulang; ringkasannya tetap masuk exam_text/plan_text untuk FHIR.
+    if "extra_json" in form:
+        try:
+            parsed = json.loads(form.get("extra_json") or "{}")
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            extra.update({str(k): v for k, v in parsed.items()})
+        else:
+            errors.append("Data tambahan O/A-P tidak valid.")
     note.extra = extra
 
     # --- A ---

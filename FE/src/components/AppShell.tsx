@@ -1,64 +1,142 @@
-import { useState } from 'react'
-import { Bell, Building2, CalendarDays, History, Menu, Settings, Stethoscope, X } from 'lucide-react'
-import { NavLink } from 'react-router'
-import { Button } from '@/components/ui/button'
-import type { User } from '@/lib/types'
+import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, Building2, CalendarDays, ChevronDown, CloudUpload, FileText, History, LayoutDashboard, LogOut, Menu, Settings, User as UserIcon, UserRound, Users, X } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router'
+import { btn, Dialog } from '@/components/ui/kit'
+import { getLocations, setLocation } from '@/lib/rm'
+import { isDoctor } from '@/lib/format'
+import type { LocationRef, User } from '@/lib/types'
 
-const today = new Intl.DateTimeFormat('id-ID', {
-  weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta',
-}).format(new Date())
+const todayLabel = new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' }).format(new Date()).replace('.', '')
 
-export function AppShell({ user, location, visitId, onLogout, children }: {
+type NavItem = { to: string; label: string; icon: React.ComponentType<{ className?: string }>; match?: string[] }
+
+const doctorNav: NavItem[] = [
+  { to: '/kunjungan', label: 'Pemeriksaan Pasien', icon: Users, match: ['/kunjungan'] },
+  { to: '/riwayat', label: 'Riwayat Pasien', icon: History, match: ['/riwayat'] },
+]
+const rmNav: NavItem[] = [
+  { to: '/rm', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/rm/pendaftaran', label: 'Pendaftaran Pasien & Kunjungan', icon: UserRound },
+  { to: '/rm/kunjungan', label: 'Daftar Kunjungan', icon: CalendarDays },
+  { to: '/rm/riwayat', label: 'Riwayat Pasien', icon: FileText },
+  { to: '/rm/satusehat', label: 'Integrasi SATUSEHAT', icon: CloudUpload },
+]
+
+function readLocCookie() {
+  const match = document.cookie.match(/(?:^|; )loc=(\d+)/)
+  return match ? Number(match[1]) : null
+}
+
+export function AppShell({ user, onLogout, title, subtitle, children }: {
   user: User
-  location?: string
-  pageTitle?: string
-  visitId?: number
   onLogout: () => void
+  /** Baris besar di header. Default: nama bilik aktif. */
+  title?: string
+  /** Baris kecil teal di atas judul header. Default: poli aktif. */
+  subtitle?: string
   children: React.ReactNode
 }) {
+  const doctor = isDoctor(user.role)
+  const nav = doctor ? doctorNav : rmNav
+  const { pathname } = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
-  const room = location?.replace('Poli ', '') || 'Umum 03'
+  const [accountOpen, setAccountOpen] = useState(false)
+  const [confirmLogout, setConfirmLogout] = useState(false)
+  const [roomOpen, setRoomOpen] = useState(false)
+  const [bellOpen, setBellOpen] = useState(false)
+  const [locId, setLocId] = useState<number | null>(readLocCookie)
+  const queryClient = useQueryClient()
+  const locations = useQuery({ queryKey: ['locations'], queryFn: getLocations, staleTime: 5 * 60_000 })
+  const current: LocationRef | undefined = locations.data?.find((l) => l.id === locId) || locations.data?.at(-1)
+  const poli = current?.poli || 'Poli Umum'
+  const room = current?.name || 'Bilik Konsultasi 03'
+  const shortRoom = current?.label || 'Umum 03'
+
+  async function chooseRoom(loc: LocationRef) {
+    setRoomOpen(false)
+    await setLocation(loc.id)
+    setLocId(loc.id)
+    await queryClient.invalidateQueries()
+  }
 
   return (
-    <div className="min-h-screen bg-[#eaf3f6] lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
-      <aside className="z-20 flex flex-col border-b border-[#cfdee5] bg-[#f8fbfc] lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r">
-        <div className="flex h-[70px] items-center justify-between border-b border-[#cfdee5] px-6">
-          <img src="/comehear-logo.png" alt="ComeHear" className="h-[44px] w-[190px] object-contain object-left" />
-          <Button variant="ghost" size="icon" className="lg:hidden" aria-label={menuOpen ? 'Tutup menu' : 'Buka menu'} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}</Button>
+    <div className="min-h-screen bg-ch-bg lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
+      <aside className="z-30 flex flex-col border-b border-[#d3e2e8] bg-[#f6fafb] lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r">
+        <div className="flex h-[71px] shrink-0 items-center justify-between border-b border-[#d3e2e8] px-6 lg:justify-center">
+          <img src="/comehear-logo.png" alt="ComeHear AI Medical Scribe" className="h-[44px] w-[190px] object-contain" />
+          <button type="button" className="grid size-9 place-items-center rounded-lg text-ch-muted hover:bg-[#e6f1f4] lg:hidden" aria-label={menuOpen ? 'Tutup menu' : 'Buka menu'} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}</button>
         </div>
 
-        <div className={`${menuOpen ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col px-4 pb-5 pt-8 lg:flex`}>
-          <p className="px-2 text-[11px] font-medium tracking-wide text-[#5d6e7d]">LAYANAN KLINIS</p>
-          <nav className="mt-2 space-y-1" aria-label="Layanan klinis">
-            <NavLink to="/kunjungan" className={({ isActive }) => `flex min-h-10 items-center gap-2.5 rounded-lg px-3 text-sm font-semibold transition-colors ${isActive || visitId ? 'bg-[#16a4b7] text-white' : 'text-[#4b5d6b] hover:bg-[#e5f4f7]'}`}>
-              <Stethoscope className="size-[18px]" /> Pemeriksaan Pasien
-            </NavLink>
-            <span aria-disabled="true" className="flex min-h-10 items-center gap-2.5 rounded-lg px-3 text-sm text-[#4b5d6b]">
-              <History className="size-[18px]" /> Riwayat Pasien
-            </span>
+        <div className={`${menuOpen ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col px-4 pb-4 pt-7 lg:flex`}>
+          <p className="px-2 text-[11px] font-semibold tracking-[0.04em] text-[#5d6e7d]">LAYANAN KLINIS</p>
+          <nav className="mt-2 space-y-1" aria-label="Menu utama">
+            {nav.map((item) => (
+              <NavLink key={item.to} to={item.to} end={item.to === '/rm'} onClick={() => setMenuOpen(false)}
+                className={({ isActive }) => {
+                  const active = isActive || (item.match?.some((prefix) => pathname.startsWith(prefix)) ?? false)
+                  return `flex min-h-[38px] items-center gap-2.5 rounded-[8px] px-3 text-[13px] transition-colors ${active ? 'bg-ch-brand font-semibold text-white' : 'text-[#33475b] hover:bg-[#e3f2f5]'}`
+                }}>
+                <item.icon className="size-[17px]" /> {item.label}
+              </NavLink>
+            ))}
           </nav>
 
-          <div className="mt-auto rounded-xl border border-[#8bdbe7] bg-[#dcf5f8] px-3 py-2.5">
-            <div className="flex items-center gap-2.5">
-              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[#087b8c] text-white"><Stethoscope className="size-5" /></span>
-              <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-[#102a43]">{user.name}</p><p className="truncate text-[11px] text-[#3d5566]">Klinik Bunga Melati</p></div>
-              <button type="button" onClick={onLogout} aria-label="Keluar dari akun" title="Keluar" className="grid size-8 place-items-center rounded-lg text-[#38505e] hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-[#0ea5b7]"><Settings className="size-[18px]" /></button>
-            </div>
+          <div className="relative mt-auto pt-6">
+            {accountOpen && <AccountPopover user={user} doctor={doctor} onClose={() => setAccountOpen(false)} onLogout={() => { setAccountOpen(false); setConfirmLogout(true) }} />}
+            <button type="button" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen} className="flex w-full items-center gap-2.5 rounded-[12px] border border-[#9fdde7] bg-[#dcf3f6] px-3 py-2.5 text-left transition hover:border-ch-brand">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-[18px]" /></span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-bold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">Klinik Bunga Melati</span></span>
+              {doctor ? <Settings className="size-[17px] text-[#38505e]" /> : <ChevronDown className="size-4 text-[#38505e]" />}
+            </button>
           </div>
         </div>
       </aside>
 
       <div className="min-w-0 lg:col-start-2">
-        <header className="sticky top-0 z-10 flex min-h-[70px] flex-wrap items-center justify-between gap-3 border-b border-[#cfdee5] bg-[#f9fcfd]/95 px-6 py-3 backdrop-blur">
-          <div><p className="text-[11px] font-medium text-[#00889a]">Poli Umum</p><p className="text-base font-bold leading-5 text-[#102a43]">Bilik Konsultasi 03</p></div>
-          <div className="flex items-center gap-2 text-sm text-[#102a43]">
-            <button type="button" className="hidden h-10 items-center gap-2 rounded-xl border border-[#d2e1e7] bg-white px-3 shadow-sm sm:flex"><Building2 className="size-4 text-[#0ea5b7]" /> {room}</button>
-            <span className="hidden h-10 items-center gap-2 rounded-xl border border-[#d2e1e7] bg-white px-3 font-semibold shadow-sm md:flex"><CalendarDays className="size-4 text-[#0ea5b7]" /> {today}</span>
-            <span className="relative grid size-10 place-items-center rounded-xl border border-[#d2e1e7] bg-white shadow-sm" aria-label="Notifikasi"><Bell className="size-[18px] text-[#305165]" /><span className="absolute right-2 top-2 size-2 rounded-full bg-[#e03131] ring-2 ring-white" /></span>
+        <header className="sticky top-0 z-20 flex min-h-[71px] flex-wrap items-center justify-between gap-3 border-b border-[#d3e2e8] bg-[#f6fafb]/95 px-6 py-2.5 backdrop-blur">
+          <div><p className="text-[11px] font-semibold text-[#0b8597]">{subtitle ?? poli}</p><p className="text-[16px] font-bold leading-5 text-ch-ink">{title ?? room}</p></div>
+          <div className="flex items-center gap-2 text-[13px] text-ch-ink">
+            <div className="relative hidden sm:block">
+              <button type="button" onClick={() => setRoomOpen(!roomOpen)} aria-expanded={roomOpen} className="flex h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 shadow-sm hover:border-ch-brand"><Building2 className="size-4 text-ch-brand" /> {shortRoom} <ChevronDown className="size-3.5 text-[#6b7f93]" /></button>
+              {roomOpen && <div className="absolute right-0 top-11 z-40 w-64 rounded-[12px] border border-[#d3e2e8] bg-white p-1.5 shadow-lg" role="menu">
+                <p className="px-2.5 py-1.5 text-[11px] font-semibold text-ch-muted">Pilih bilik layanan</p>
+                {(locations.data || []).map((loc) => <button key={loc.id} type="button" role="menuitem" onClick={() => void chooseRoom(loc)} className={`flex w-full flex-col rounded-lg px-2.5 py-2 text-left hover:bg-[#eef6f8] ${loc.id === current?.id ? 'bg-[#e6f6f8]' : ''}`}><span className="text-[13px] font-semibold">{loc.name}</span><span className="text-[11px] text-ch-muted">{loc.poli}</span></button>)}
+              </div>}
+            </div>
+            <span className="hidden h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 font-semibold shadow-sm md:flex"><CalendarDays className="size-4 text-ch-brand" /> {todayLabel}</span>
+            <div className="relative">
+              <button type="button" aria-label="Notifikasi" aria-expanded={bellOpen} onClick={() => setBellOpen(!bellOpen)} className="relative grid size-9 place-items-center rounded-[10px] border border-[#d2e1e7] bg-white shadow-sm hover:border-ch-brand"><Bell className="size-[17px] text-[#305165]" /><span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-[#e03131] ring-2 ring-white" /></button>
+              {bellOpen && <div className="absolute right-0 top-11 z-40 w-72 rounded-[12px] border border-[#d3e2e8] bg-white p-4 text-sm shadow-lg"><p className="font-semibold">Notifikasi</p><p className="mt-1 text-xs text-ch-muted">Status kirim SATUSEHAT dan kunjungan baru akan muncul di sini.</p></div>}
+            </div>
           </div>
         </header>
-        <main className="p-4 sm:p-6">{children}</main>
+        <main className="mx-auto max-w-[1180px] p-4 sm:p-6">{children}</main>
       </div>
+
+      <Dialog open={confirmLogout} onClose={() => setConfirmLogout(false)} title="Keluar dari akun?">
+        <p className="text-sm text-ch-muted">Sesi {doctor ? 'dokter' : 'petugas'} akan diakhiri. Draf yang belum disimpan pada halaman ini akan hilang.</p>
+        <div className="mt-6 flex justify-end gap-3"><button type="button" className={btn.outline} onClick={() => setConfirmLogout(false)}>Batal</button><button type="button" className={btn.danger} onClick={onLogout}><LogOut className="size-4" /> Ya, Logout</button></div>
+      </Dialog>
     </div>
   )
+}
+
+function AccountPopover({ user, doctor, onClose, onLogout }: { user: User; doctor: boolean; onClose: () => void; onLogout: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onDown = (event: MouseEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) onClose() }
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    setTimeout(() => document.addEventListener('mousedown', onDown))
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [onClose])
+  return <div ref={ref} className="absolute bottom-[72px] left-0 z-40 w-[272px] rounded-[14px] border border-[#d3e2e8] bg-white p-3 shadow-[0_12px_32px_rgba(8,29,45,0.14)]">
+    <div className="flex items-center gap-3 border-b border-[#e3ecf0] pb-3">
+      <span className="grid size-10 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-5" /></span>
+      <div className="min-w-0"><p className="truncate text-sm font-bold">{user.name}</p><p className="truncate text-xs text-ch-muted">{user.email}</p><p className="text-[11px] text-ch-teal">{doctor ? 'Dokter · Klinik Bunga Melati' : 'Petugas Rekam Medis · Klinik Bunga Melati'}</p></div>
+    </div>
+    {doctor && <button type="button" onClick={onClose} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#33475b] hover:bg-[#eef6f8]"><Settings className="size-4" /> Pengaturan</button>}
+    <button type="button" onClick={onLogout} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold text-[#bf2e36] hover:bg-[#fdecec]"><LogOut className="size-4" /> Logout</button>
+  </div>
 }

@@ -110,7 +110,9 @@ def serialize_patient(p: Patient | None) -> dict | None:
         "gender": p.gender,
         "gender_label": kelamin(p.gender),
         "birth_date": p.birth_date.isoformat() if p.birth_date else None,
-        "usia": usia(p.birth_date)
+        "usia": usia(p.birth_date),
+        "phone": p.phone,
+        "address": p.address
     }
 
 
@@ -838,12 +840,119 @@ def history_page(q: str = "", user: User = Depends(current_user), db: Session = 
                 "status": v.status,
                 "arrived_at": v.arrived_at.isoformat() if v.arrived_at else None,
                 "patient": serialize_patient(v.patient),
-                "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location)},
+                "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location),
+                             "poli": v.location.poli},
+                "doctor": v.practitioner.name if v.practitioner else None,
+                "diagnosis": (v.note.diagnoses[0]["display"] if v.note and v.note.diagnoses else None),
+                "diagnosis_code": (v.note.diagnoses[0]["code"] if v.note and v.note.diagnoses else None),
                 "is_approved": bool(v.note and v.note.approved_snapshot),
+                "submission_status": v.latest_submission.status if v.latest_submission else None,
                 "satusehat_encounter_id": v.satusehat_encounter_id
             }
             for v in visits
         ]
+    }
+
+
+# ---------------- Petugas Rekam Medis ----------------
+def rm_status(v: Visit) -> str:
+    if v.note and v.note.approved_snapshot:
+        return "selesai"
+    if v.called_at or v.status in ("consented", "manual", "processing", "draft"):
+        return "dalam_pemeriksaan"
+    if v.confirmed_at:
+        return "menunggu_pemeriksaan"
+    return "terjadwal"
+
+
+def serialize_rm_visit(v: Visit) -> dict:
+    return {
+        "id": v.id,
+        "code": v.code,
+        "queue_no": v.queue_no,
+        "visit_date": v.arrived_at.astimezone(WIB).date().isoformat() if v.arrived_at else None,
+        "arrived_at": v.arrived_at.isoformat() if v.arrived_at else None,
+        "confirmed_at": v.confirmed_at.isoformat() if v.confirmed_at else None,
+        "visit_type": v.visit_type or "Kontrol",
+        "admin_note": v.admin_note,
+        "rm_status": rm_status(v),
+        "patient": serialize_patient(v.patient),
+        "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location),
+                     "poli": v.location.poli},
+        "doctor": v.practitioner.name if v.practitioner else None,
+        "submission_status": v.latest_submission.status if v.latest_submission else None,
+    }
+
+
+@app.get("/api/practitioners")
+def list_practitioners(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return [{"id": p.id, "name": p.name} for p in db.scalars(select(Practitioner).order_by(Practitioner.name))]
+
+
+@app.get("/api/rm/kunjungan")
+def rm_visits(scope: str = "hari_ini", q: str = "", status: str = "", tanggal: str = "",
+              user: User = Depends(current_user), db: Session = Depends(get_db)):
+    start = today_start_utc()
+    if tanggal:
+        try:
+            day = datetime.strptime(tanggal, "%Y-%m-%d").date()
+            start = datetime(day.year, day.month, day.day, tzinfo=WIB).astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(400, "Tanggal tidak valid.")
+    end = start + timedelta(days=1)
+    stmt = select(Visit).join(Patient)
+    if scope == "mendatang":
+        stmt = stmt.where(Visit.arrived_at >= end).order_by(Visit.arrived_at, Visit.queue_no)
+    elif scope == "riwayat":
+        stmt = stmt.where(Visit.arrived_at < start).order_by(Visit.arrived_at.desc())
+    else:
+        stmt = stmt.where(Visit.arrived_at >= start, Visit.arrived_at < end).order_by(Visit.queue_no, Visit.id)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Patient.name.ilike(like), Patient.rm_number.ilike(like)))
+    rows = [serialize_rm_visit(v) for v in db.scalars(stmt.limit(300)).all()]
+    counts = {k: sum(r["rm_status"] == k for r in rows)
+              for k in ("terjadwal", "menunggu_pemeriksaan", "dalam_pemeriksaan", "selesai")}
+    counts["total"] = len(rows)
+    if status:
+        rows = [r for r in rows if r["rm_status"] == status]
+    return {"status": "ok", "scope": scope, "counts": counts, "rows": rows,
+            "updated_at": utcnow().isoformat()}
+
+
+@app.post("/visits/{visit_id}/konfirmasi")
+def confirm_arrival(visit_id: int, user: User = Depends(require("admin", "perawat")),
+                    db: Session = Depends(get_db)):
+    v = get_visit(db, visit_id)
+    if v.confirmed_at:
+        raise HTTPException(409, "Kedatangan pasien ini sudah dikonfirmasi.")
+    v.confirmed_at = utcnow()
+    audit(db, user, "konfirmasi_kedatangan", f"visit:{v.id}")
+    db.commit()
+    return {"status": "ok", "message": f"Kedatangan {v.patient.name} dikonfirmasi. Status: Menunggu Pemeriksaan.",
+            "visit": serialize_rm_visit(v)}
+
+
+@app.get("/api/satusehat/pengiriman")
+def satusehat_submissions(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    subs = db.scalars(select(Submission).order_by(Submission.id.desc()).limit(200)).all()
+    return {
+        "status": "ok",
+        "mode": settings.satusehat_mode,
+        "rows": [{
+            "id": s.id,
+            "status": s.status,
+            "attempts": s.attempts,
+            "last_error_code": s.last_error_code,
+            "last_error_text": s.last_error_text,
+            "visit_id": s.visit_id,
+            "visit_code": s.visit.code if s.visit else None,
+            "visit_date": s.visit.arrived_at.isoformat() if s.visit and s.visit.arrived_at else None,
+            "patient": serialize_patient(s.visit.patient) if s.visit else None,
+            "doctor": s.visit.practitioner.name if s.visit and s.visit.practitioner else None,
+            "poli": s.visit.location.poli if s.visit else None,
+        } for s in subs],
+        "updated_at": utcnow().isoformat(),
     }
 
 
@@ -860,25 +969,29 @@ def registration_page(user: User = Depends(current_user), db: Session = Depends(
     }
 
 
+async def _body(request: Request) -> dict:
+    """Isian dari JSON atau form, supaya frontend React dan klien lama sama-sama bisa memakai rute ini."""
+    if "application/json" in request.headers.get("content-type", ""):
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    return dict(await request.form())
+
+
 @app.post("/pendaftaran/pasien")
-async def add_patient(request: Request, name: str = Form(None), nik: str = Form(""),
-                     birth_date: str = Form(None), gender: str = Form(None),
-                     ihs_number: str = Form(""), user: User = Depends(require("admin", "perawat", "dokter")),
-                     db: Session = Depends(get_db)):
-    if not name or not birth_date or not gender:
-        ct = request.headers.get("content-type", "")
-        if "application/json" in ct:
-            body = await request.json()
-            name = body.get("name")
-            nik = body.get("nik", "")
-            birth_date = body.get("birth_date")
-            gender = body.get("gender")
-            ihs_number = body.get("ihs_number", "")
+async def add_patient(request: Request, user: User = Depends(require("admin", "perawat", "dokter")),
+                      db: Session = Depends(get_db)):
+    body = await _body(request)
+    name, birth_date, gender = body.get("name"), body.get("birth_date"), body.get("gender")
+    nik, ihs_number = str(body.get("nik") or ""), str(body.get("ihs_number") or "")
     if not name or not birth_date or not gender:
         raise HTTPException(400, "Nama, tanggal lahir, dan jenis kelamin wajib diisi.")
+    if nik.strip() and not (nik.strip().isdigit() and len(nik.strip()) == 16):
+        raise HTTPException(400, "NIK harus 16 digit angka.")
 
-    p = Patient(name=name.strip(), rm_number=next_rm_number(db), nik=nik.strip() or None, gender=gender,
-                birth_date=datetime.strptime(birth_date, "%Y-%m-%d").date(), ihs_number=ihs_number.strip() or None)
+    p = Patient(name=str(name).strip(), rm_number=next_rm_number(db), nik=nik.strip() or None, gender=gender,
+                birth_date=datetime.strptime(birth_date, "%Y-%m-%d").date(), ihs_number=ihs_number.strip() or None,
+                phone=str(body.get("phone") or "").strip() or None,
+                address=str(body.get("address") or "").strip() or None)
     db.add(p)
     db.flush()
     msg = f"Pasien {p.name} ditambahkan (RM {p.rm_number})."
@@ -899,22 +1012,33 @@ async def add_patient(request: Request, name: str = Form(None), nik: str = Form(
 
 
 @app.post("/pendaftaran/kunjungan")
-async def register_visit(request: Request, patient_id: int = Form(None),
-                         user: User = Depends(current_user), db: Session = Depends(get_db)):
-    pid = patient_id
-    if pid is None:
-        ct = request.headers.get("content-type", "")
-        if "application/json" in ct:
-            body = await request.json()
-            pid = body.get("patient_id")
-    if pid is None:
+async def register_visit(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    body = await _body(request)
+    pid = body.get("patient_id")
+    if pid in (None, ""):
         raise HTTPException(400, "patient_id wajib diisi.")
+    if not db.get(Patient, int(pid)):
+        raise HTTPException(404, "Pasien tidak ditemukan.")
 
     loc = current_location(request, db)
-    dr = db.get(Practitioner, user.practitioner_id) if user.practitioner_id else \
-        db.scalar(select(Practitioner).order_by(Practitioner.id.desc()))
+    dr = None
+    if body.get("practitioner_id"):
+        dr = db.get(Practitioner, int(body["practitioner_id"]))
+    if dr is None:
+        dr = db.get(Practitioner, user.practitioner_id) if user.practitioner_id else \
+            db.scalar(select(Practitioner).order_by(Practitioner.id.desc()))
+    arrived = utcnow()
+    if body.get("visit_date"):
+        try:
+            day = datetime.strptime(str(body["visit_date"]), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(400, "Tanggal kunjungan tidak valid.")
+        if day != datetime.now(WIB).date():
+            arrived = datetime(day.year, day.month, day.day, 8, 0, tzinfo=WIB).astimezone(timezone.utc)
     v = Visit(code=next_visit_code(db), patient_id=int(pid), practitioner_id=dr.id, location_id=loc.id,
-              queue_no=next_queue_no(db, loc.id))
+              queue_no=next_queue_no(db, loc.id), arrived_at=arrived,
+              visit_type=str(body.get("visit_type") or "Baru"),
+              admin_note=str(body.get("admin_note") or "").strip() or None)
     db.add(v)
     db.flush()
     audit(db, user, "create_visit", f"visit:{v.id}", v.code)

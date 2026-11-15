@@ -7,7 +7,7 @@
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Inter Variable', Arial, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', 'Inter Variable', Arial, sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -151,3 +151,31 @@
   --sidebar-accent-foreground: #0b6e7d;
   --sidebar-border: #d5e4e9;
 }
+
+/* ---- ComeHear design tokens (DESIGN.md §2) ---- */
+@theme {
+  --font-jakarta: 'Plus Jakarta Sans', 'Inter Variable', Arial, sans-serif;
+  --font-inter: 'Inter Variable', Arial, sans-serif;
+  --color-ch-bg: #e8f1f4;
+  --color-ch-surface: #f6fafb;
+  --color-ch-panel: #fbfdfe;
+  --color-ch-field: #f8fbfc;
+  --color-ch-line: #d5e4e9;
+  --color-ch-ink: #081d2d;
+  --color-ch-ink-2: #18293a;
+  --color-ch-muted: #526578;
+  --color-ch-faint: #8a9bad;
+  --color-ch-brand: #14a3b8;
+  --color-ch-brand-hover: #0f8fa2;
+  --color-ch-teal: #0b6e7d;
+  --color-ch-teal-soft: #ddf3f6;
+  --color-ch-ok: #136f4e;
+  --color-ch-ok-soft: #e2f3ec;
+  --color-ch-bad: #c92a2a;
+  --color-ch-bad-soft: #fde8e8;
+  --color-ch-warn: #9a6a00;
+  --color-ch-warn-soft: #fff4dc;
+}
+
+html, body { font-family: var(--font-jakarta); color: var(--color-ch-ink); background: var(--color-ch-bg); }
+.font-inter { font-family: var(--font-inter); }

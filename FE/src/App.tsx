@@ -1,19 +1,25 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router'
 import { AppShell } from '@/components/AppShell'
 import { ErrorState, LoadingState } from '@/components/Feedback'
-import { Button } from '@/components/ui/button'
 import { apiRequest, ApiError } from '@/lib/api'
-import type { User } from '@/lib/types'
 import { getConsultation } from '@/lib/clinical'
+import { isDoctor } from '@/lib/format'
+import type { User } from '@/lib/types'
 import { LoginPage } from '@/pages/LoginPage'
 import { VisitsPage } from '@/pages/VisitsPage'
 import { SubjectivePage } from '@/pages/SubjectivePage'
 import { DraftSubjectivePage } from '@/pages/DraftSubjectivePage'
-import { OapPage } from '@/pages/OapPage'
+import { ObjectivePage } from '@/pages/ObjectivePage'
+import { AssessmentPlanPage } from '@/pages/AssessmentPlanPage'
 import { ReviewPage } from '@/pages/ReviewPage'
 import { ResumePage } from '@/pages/ResumePage'
+import { HistoryListPage, HistoryDetailPage } from '@/pages/HistoryPage'
+import { RmDashboardPage } from '@/pages/rm/RmDashboardPage'
+import { RegistrationPage } from '@/pages/rm/RegistrationPage'
+import { RmVisitsPage } from '@/pages/rm/RmVisitsPage'
+import { SatusehatPage } from '@/pages/rm/SatusehatPage'
 
 async function getCurrentUser(): Promise<User | null> {
   try {
@@ -24,25 +30,39 @@ async function getCurrentUser(): Promise<User | null> {
   }
 }
 
-function DoctorVisitRoute({ user, onLogout, onSessionExpired }: { user: User; onLogout: () => void; onSessionExpired: () => void }) {
-  const { visitId, stage } = useParams()
+const homeOf = (user: User | null | undefined) => !user ? '/login' : isDoctor(user.role) ? '/kunjungan' : '/rm'
+const clinicalStages = ['subjektif', 'draf-s', 'objektif', 'asesmen', 'verifikasi']
+
+export type SessionProps = { user: User; onLogout: () => void; onSessionExpired: () => void }
+
+function DoctorVisitRoute({ user, onLogout, onSessionExpired }: SessionProps) {
+  const { visitId, stage = '' } = useParams()
   const id = Number(visitId)
-  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: Number.isInteger(id) && id > 0 && stage !== 'resume' })
+  const valid = Number.isInteger(id) && id > 0
+  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: valid && clinicalStages.includes(stage) })
   const expired = consultation.error instanceof ApiError && consultation.error.status === 401
   useEffect(() => { if (expired) onSessionExpired() }, [expired, onSessionExpired])
-  if (!Number.isInteger(id) || id <= 0) return <Navigate to="/kunjungan" replace />
+  if (!valid) return <Navigate to="/kunjungan" replace />
+  if (stage === 'oap') return <Navigate to={`/kunjungan/${id}/objektif`} replace />
   if (stage === 'resume') return <ResumePage id={id} user={user} onLogout={onLogout} />
-  if (!['subjektif', 'draf-s', 'oap', 'verifikasi'].includes(stage || '')) return <Navigate to="/kunjungan" replace />
-  if (expired) return <LoadingState label="Sesi berakhir…" />
-  if (consultation.isPending) return <LoadingState label="Memuat konsultasi…" />
-  if (consultation.isError) return <div className="mx-auto mt-20 max-w-lg"><ErrorState message={consultation.error.message} onRetry={() => consultation.refetch()} /></div>
-  if (consultation.data.locked) return <Navigate to={`/kunjungan/${id}/resume`} replace />
-  const hasSubjective = Boolean(consultation.data.note.subjective_summary.trim() || Object.values(consultation.data.note.subjective).some((value) => value.trim()))
-  if (stage !== 'subjektif' && !consultation.data.visit.consent && !hasSubjective) return <Navigate to={`/kunjungan/${id}/subjektif`} replace />
-  const titles: Record<string, string> = { subjektif: 'SOAP · Subjektif', 'draf-s': 'SOAP · Tinjau Subjektif', oap: 'SOAP · O-A-P', verifikasi: 'SOAP · Verifikasi' }
-  return <AppShell user={user} location={consultation.data.visit.location.label} pageTitle={titles[stage!]} visitId={id} onLogout={onLogout}>
-    {stage === 'subjektif' ? <SubjectivePage data={consultation.data} /> : stage === 'draf-s' ? <DraftSubjectivePage data={consultation.data} /> : stage === 'oap' ? <OapPage data={consultation.data} /> : <ReviewPage data={consultation.data} />}
-  </AppShell>
+  if (!clinicalStages.includes(stage)) return <Navigate to="/kunjungan" replace />
+
+  const body = expired ? <LoadingState label="Sesi berakhir…" />
+    : consultation.isPending ? <LoadingState label="Memuat konsultasi…" />
+    : consultation.isError ? <ErrorState message={consultation.error.message} onRetry={() => consultation.refetch()} />
+    : null
+  if (body) return <AppShell user={user} onLogout={onLogout}>{body}</AppShell>
+  const data = consultation.data!
+  if (data.locked) return <Navigate to={`/kunjungan/${id}/resume`} replace />
+  const hasSubjective = Boolean(data.note.subjective_summary.trim() || Object.values(data.note.subjective).some((value) => String(value).trim()))
+  if (stage !== 'subjektif' && !data.visit.consent && !hasSubjective && !data.session) return <Navigate to={`/kunjungan/${id}/subjektif`} replace />
+
+  const page = stage === 'subjektif' ? <SubjectivePage data={data} />
+    : stage === 'draf-s' ? <DraftSubjectivePage data={data} />
+    : stage === 'objektif' ? <ObjectivePage data={data} />
+    : stage === 'asesmen' ? <AssessmentPlanPage data={data} />
+    : <ReviewPage data={data} />
+  return <AppShell user={user} onLogout={onLogout}>{page}</AppShell>
 }
 
 function App() {
@@ -50,13 +70,13 @@ function App() {
   const queryClient = useQueryClient()
   const me = useQuery({ queryKey: ['me'], queryFn: getCurrentUser, retry: 1 })
 
-  async function logout() {
+  const logout = useCallback(async () => {
     try { await apiRequest('/api/backend/logout', { method: 'POST' }) } finally {
+      queryClient.clear()
       queryClient.setQueryData(['me'], null)
-      queryClient.removeQueries({ queryKey: ['queue'] })
       navigate('/login', { replace: true })
     }
-  }
+  }, [navigate, queryClient])
 
   async function login(email: string, password: string) {
     const result = await apiRequest<{ user: User }>('/api/backend/login', {
@@ -64,29 +84,37 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     })
-    if (result.user.role !== 'dokter') {
-      await apiRequest('/api/backend/logout', { method: 'POST' })
-      throw new Error('Akun ini bukan akun dokter. Masuk dengan akun dokter.')
-    }
     queryClient.setQueryData(['me'], result.user)
-    navigate('/kunjungan', { replace: true })
+    navigate(homeOf(result.user), { replace: true })
   }
 
-  function expireSession() {
+  const expireSession = useCallback(() => {
+    queryClient.clear()
     queryClient.setQueryData(['me'], null)
-    queryClient.removeQueries({ queryKey: ['queue'] })
     navigate('/login?expired=1', { replace: true })
-  }
+  }, [navigate, queryClient])
 
   if (me.isPending) return <div className="grid min-h-screen place-items-center"><LoadingState label="Memeriksa sesi…" /></div>
   if (me.isError) return <div className="mx-auto mt-20 max-w-lg p-5"><ErrorState message={me.error.message} onRetry={() => me.refetch()} /></div>
 
+  const user = me.data
+  const session = user ? { user, onLogout: logout, onSessionExpired: expireSession } : null
+  const doctorOnly = (element: React.ReactNode) => !session ? <Navigate to="/login" replace /> : isDoctor(session.user.role) ? element : <Navigate to="/rm" replace />
+  const rmOnly = (element: React.ReactNode) => !session ? <Navigate to="/login" replace /> : !isDoctor(session.user.role) ? element : <Navigate to="/kunjungan" replace />
+
   return <Routes>
-    <Route path="/login" element={me.data ? <Navigate to={me.data.role === 'dokter' ? '/kunjungan' : '/akses-ditolak'} replace /> : <LoginPage onLogin={login} />} />
-    <Route path="/kunjungan" element={me.data?.role === 'dokter' ? <VisitsPage user={me.data} onLogout={logout} onSessionExpired={expireSession} /> : <Navigate to={me.data ? '/akses-ditolak' : '/login'} replace />} />
-    <Route path="/kunjungan/:visitId/:stage" element={me.data?.role === 'dokter' ? <DoctorVisitRoute user={me.data} onLogout={logout} onSessionExpired={expireSession} /> : <Navigate to={me.data ? '/akses-ditolak' : '/login'} replace />} />
-    <Route path="/akses-ditolak" element={<div className="mx-auto mt-20 max-w-lg space-y-4 rounded-xl bg-white p-8"><h1 className="text-xl font-bold">Akses dokter diperlukan</h1><p>Halaman ini hanya tersedia untuk akun dokter.</p><Button onClick={logout}>Keluar</Button></div>} />
-    <Route path="*" element={<Navigate to={me.data ? '/kunjungan' : '/login'} replace />} />
+    <Route path="/login" element={user ? <Navigate to={homeOf(user)} replace /> : <LoginPage onLogin={login} />} />
+    <Route path="/kunjungan" element={doctorOnly(session && <VisitsPage {...session} />)} />
+    <Route path="/kunjungan/:visitId/:stage" element={doctorOnly(session && <DoctorVisitRoute {...session} />)} />
+    <Route path="/riwayat" element={doctorOnly(session && <HistoryListPage {...session} base="/riwayat" />)} />
+    <Route path="/riwayat/:visitId" element={doctorOnly(session && <HistoryDetailPage {...session} base="/riwayat" />)} />
+    <Route path="/rm" element={rmOnly(session && <RmDashboardPage {...session} />)} />
+    <Route path="/rm/pendaftaran" element={rmOnly(session && <RegistrationPage {...session} />)} />
+    <Route path="/rm/kunjungan" element={rmOnly(session && <RmVisitsPage {...session} />)} />
+    <Route path="/rm/riwayat" element={rmOnly(session && <HistoryListPage {...session} base="/rm/riwayat" />)} />
+    <Route path="/rm/riwayat/:visitId" element={rmOnly(session && <HistoryDetailPage {...session} base="/rm/riwayat" />)} />
+    <Route path="/rm/satusehat" element={rmOnly(session && <SatusehatPage {...session} />)} />
+    <Route path="*" element={<Navigate to={homeOf(user)} replace />} />
   </Routes>
 }
 

@@ -1,0 +1,98 @@
+import { useEffect, useRef } from 'react'
+import { ChevronDown, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+/* Komponen dasar ComeHear: mengikuti DESIGN.md (panel terang, border tipis, teal untuk aksi utama). */
+
+export const inputClass = 'h-10 w-full rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-sm text-ch-ink outline-none transition placeholder:text-[#a3b1bf] focus:border-ch-brand focus:ring-2 focus:ring-ch-brand/15 disabled:bg-[#f2f6f8] disabled:text-ch-muted'
+
+export function Panel({ className, children, highlight }: { className?: string; children: React.ReactNode; highlight?: boolean }) {
+  return <section className={cn('rounded-[16px] border bg-ch-panel p-5', highlight ? 'border-ch-brand shadow-[0_0_0_1px_#14a3b8]' : 'border-[#d3e2e8]', className)}>{children}</section>
+}
+
+export function PanelTitle({ children, action, sub }: { children: React.ReactNode; action?: React.ReactNode; sub?: React.ReactNode }) {
+  return <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-[20px] font-bold leading-7 text-ch-ink">{children}</h2>{sub && <p className="mt-0.5 text-xs text-ch-muted">{sub}</p>}</div>{action}</div>
+}
+
+const tones = {
+  ok: 'border-[#9fdcc0] bg-ch-ok-soft text-ch-ok',
+  bad: 'border-[#f3b6b6] bg-ch-bad-soft text-ch-bad',
+  info: 'border-[#8edbe6] bg-[#dff6f9] text-ch-teal',
+  blue: 'border-[#7fb6ff] bg-[#e8f3ff] text-[#0a66d1]',
+  muted: 'border-[#cfdbe3] bg-[#edf2f6] text-[#52677b]',
+  warn: 'border-[#f0d08a] bg-ch-warn-soft text-ch-warn',
+} as const
+
+export type Tone = keyof typeof tones
+
+export function Badge({ tone = 'muted', children, className, icon }: { tone?: Tone; children: React.ReactNode; className?: string; icon?: React.ReactNode }) {
+  return <span className={cn('inline-flex w-fit items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-[3px] text-[11px] font-semibold leading-4', tones[tone], className)}>{icon}{children}</span>
+}
+
+export function FieldBox({ label, children, className, htmlFor }: { label: React.ReactNode; children: React.ReactNode; className?: string; htmlFor?: string }) {
+  return <div className={cn('rounded-[12px] border border-[#d6e3e9] bg-ch-field p-3', className)}><label htmlFor={htmlFor} className="mb-2 block text-xs font-semibold text-[#3f5468]">{label}</label>{children}</div>
+}
+
+export function Label({ children, required, htmlFor }: { children: React.ReactNode; required?: boolean; htmlFor?: string }) {
+  return <label htmlFor={htmlFor} className="mb-1.5 block text-xs font-semibold text-[#3f5468]">{children}{required && <span className="text-ch-bad"> *</span>}</label>
+}
+
+export function UnitInput({ unit, className, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { unit?: string }) {
+  return <span className="relative block"><input {...props} className={cn(inputClass, 'font-inter', unit && 'pr-16', className)} />{unit && <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] text-[#8799ad]">{unit}</span>}</span>
+}
+
+export function SelectInput({ className, children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return <span className="relative block"><select {...props} className={cn(inputClass, 'font-inter appearance-none pr-9', className)}>{children}</select><ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[#71859a]" /></span>
+}
+
+export function TextArea({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={cn('w-full rounded-[10px] border border-[#d2e1e7] bg-white p-3 text-sm text-ch-ink outline-none placeholder:text-[#a3b1bf] focus:border-ch-brand focus:ring-2 focus:ring-ch-brand/15', className)} />
+}
+
+export function Radio({ label, checked, onChange, name, disabled }: { label: React.ReactNode; checked: boolean; onChange: () => void; name: string; disabled?: boolean }) {
+  return <label className={cn('inline-flex cursor-pointer items-center gap-2 text-xs text-[#33475b]', disabled && 'cursor-not-allowed opacity-60')}><input type="radio" name={name} checked={checked} onChange={onChange} disabled={disabled} className="peer sr-only" /><span className="grid size-4 place-items-center rounded-full border border-[#9aabba] bg-white peer-checked:border-ch-brand peer-focus-visible:ring-2 peer-focus-visible:ring-ch-brand/30">{checked && <span className="size-2 rounded-full bg-ch-brand" />}</span>{label}</label>
+}
+
+export function Check({ label, checked, onChange, disabled }: { label: React.ReactNode; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
+  return <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#33475b]"><input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="size-4 rounded accent-ch-brand" />{label}</label>
+}
+
+export function SectionLabel({ number, children }: { number?: string; children: React.ReactNode }) {
+  return <h3 className="mb-3 mt-6 text-xs font-semibold uppercase tracking-wide text-[#4d6275]">{number && <span className="mr-2">{number}</span>}{children}</h3>
+}
+
+export function FieldCaps({ children }: { children: React.ReactNode }) {
+  return <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[#73879a]">{children}</p>
+}
+
+export const btn = {
+  primary: 'inline-flex h-10 items-center justify-center gap-2 rounded-[10px] bg-ch-brand px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-ch-brand-hover disabled:cursor-not-allowed disabled:opacity-50',
+  outline: 'inline-flex h-10 items-center justify-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-4 text-sm font-semibold text-[#24384c] transition hover:border-ch-brand hover:text-ch-teal disabled:cursor-not-allowed disabled:opacity-50',
+  soft: 'inline-flex h-10 items-center justify-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-[#eef4f7] px-4 text-sm font-semibold text-[#3d5266] transition hover:bg-[#e3eef2] disabled:cursor-not-allowed disabled:opacity-50',
+  ghostTeal: 'inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-[#8edbe6] bg-[#e2f6f9] px-3 text-xs font-semibold text-[#0b8597] transition hover:bg-[#d3f0f4]',
+  danger: 'inline-flex h-10 items-center justify-center gap-2 rounded-[10px] bg-[#bf2e36] px-4 text-sm font-semibold text-white hover:bg-[#a5242c] disabled:opacity-50',
+}
+
+export function Notice({ tone = 'ok', children }: { tone?: 'ok' | 'bad' | 'info'; children: React.ReactNode }) {
+  const style = tone === 'ok' ? 'border-[#a8dfc8] bg-[#eaf8f2] text-[#176e4e]' : tone === 'bad' ? 'border-[#f2b8b8] bg-[#fff0f0] text-[#9d2525]' : 'border-[#a3dfea] bg-[#e6f6f8] text-ch-teal'
+  return <p role={tone === 'bad' ? 'alert' : 'status'} className={cn('rounded-[12px] border px-4 py-3 text-sm', style)}>{children}</p>
+}
+
+export function Dialog({ open, onClose, title, children, width = 500 }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; width?: number }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement as HTMLElement | null
+    ref.current?.querySelector<HTMLElement>('button, [href], input, select, textarea')?.focus()
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('keydown', onKey); previous?.focus() }
+  }, [open, onClose])
+  if (!open) return null
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#081d2d]/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div ref={ref} role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: width }} className="w-full rounded-[16px] border border-[#d3e2e8] bg-white p-6 shadow-[0_20px_50px_rgba(8,29,45,0.18)]">
+      <div className="flex items-start justify-between gap-4"><h2 className="text-[20px] font-bold text-ch-ink">{title}</h2><button type="button" aria-label="Tutup" onClick={onClose} className="grid size-8 place-items-center rounded-lg text-ch-muted hover:bg-[#eef4f7]"><X className="size-4" /></button></div>
+      <div className="mt-3">{children}</div>
+    </div>
+  </div>
+}

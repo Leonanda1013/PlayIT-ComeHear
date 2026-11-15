@@ -77,8 +77,10 @@ def seed_today_queue(db: Session) -> int:
     for p in db.scalars(select(Patient).where(Patient.name.in_(demo_names)).order_by(Patient.id)):
         if p.id in queued:
             continue
+        # Antrean demo dianggap sudah dikonfirmasi kedatangannya oleh petugas rekam medis.
         db.add(Visit(code=next_visit_code(db), patient_id=p.id, practitioner_id=dr.id, location_id=loc.id,
-                     queue_no=next_queue_no(db, loc.id)))
+                     queue_no=next_queue_no(db, loc.id), confirmed_at=datetime.now(timezone.utc),
+                     visit_type="Kontrol"))
         db.flush()
         added += 1
     db.commit()
