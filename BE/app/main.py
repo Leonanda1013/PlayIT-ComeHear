@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import Integer, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine, get_db
@@ -328,8 +328,12 @@ def draft_label(v: Visit, state: str) -> tuple[str, str]:
 def queue_api(request: Request, tab: str = "semua", q: str = "", user: User = Depends(current_user),
               db: Session = Depends(get_db)):
     loc = current_location(request, db)
+    # Pasien, lokasi, catatan, dan sesi scribe diambil sekaligus (bukan 1 query per baris):
+    # ke Supabase tiap query ±50 ms, jadi N+1 membuat antrean terasa lambat.
     visits = db.scalars(select(Visit).where(Visit.location_id == loc.id, Visit.arrived_at >= today_start_utc())
-                        .order_by(Visit.queue_no, Visit.id)).all()
+                        .options(joinedload(Visit.patient), joinedload(Visit.location), joinedload(Visit.note),
+                                 selectinload(Visit.scribe_sessions))
+                        .order_by(Visit.queue_no, Visit.id)).unique().all()
     # Pastikan hanya ada tepat 1 pasien aktif ("saat_ini"): pasien belum selesai dengan called_at paling baru
     active_candidates = [
         v for v in visits if v.called_at and not (v.note and v.note.approved_snapshot)
@@ -440,6 +444,8 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "started_at": v.started_at.isoformat() if v.started_at else None,
             "ended_at": v.ended_at.isoformat() if v.ended_at else None,
             "called_at": v.called_at.isoformat() if v.called_at else None,
+            "arrived_at": v.arrived_at.isoformat() if v.arrived_at else None,
+            "doctor": v.practitioner.name if v.practitioner else None,
             "patient": serialize_patient(v.patient),
             "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location)},
             "consent": {
@@ -460,6 +466,7 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "prescriptions": note.prescriptions or [],
             "assessment": note.assessment or "",
             "extra": note.extra or {},
+            "updated_at": note.updated_at.isoformat() if note.updated_at else None,
             "approved": bool(note.approved_snapshot),
             "approved_snapshot": note.approved_snapshot
         },

@@ -180,6 +180,10 @@
 html, body { font-family: var(--font-jakarta); color: var(--color-ch-ink); background: var(--color-ch-bg); }
 .font-inter { font-family: var(--font-inter); }
 
+/* Scrollbar disembunyikan; konten tetap bisa digulir dengan roda mouse, trackpad, atau sentuhan. */
+* { scrollbar-width: none; -ms-overflow-style: none; }
+*::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
 @media print {
   @page {
     size: A4 portrait;
