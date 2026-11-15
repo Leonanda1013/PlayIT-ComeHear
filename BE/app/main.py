@@ -1073,15 +1073,14 @@ async def update_patient(patient_id: int, request: Request,
         elif gender in ("L", "P"):
             p.gender = "male" if gender == "L" else "female"
 
-    if nik:
+    if "nik" in body:
+        if not nik:
+            raise HTTPException(400, "NIK wajib diisi.")
         if not (nik.isdigit() and len(nik) == 16):
             raise HTTPException(400, "NIK harus 16 digit angka.")
         if nik != (p.nik or ""):
             p.nik = nik
             p.ihs_number = None
-    elif body.get("nik") == "":
-        p.nik = None
-        p.ihs_number = None
 
     if phone is not None:
         p.phone = phone
