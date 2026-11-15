@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowUp, AudioLines, Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Pause, Play, Printer, Search, SlidersHorizontal, Volume2, X } from 'lucide-react'
+import { ArrowUp, ArrowUpDown, AudioLines, Building2, CalendarDays, CheckCircle2, ChevronDown, Eye, Pause, Pencil, Play, Printer, Search, SlidersHorizontal, Volume2, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -32,12 +32,95 @@ function matchRange(v: HistoryVisit, range: string) {
   return new Date(v.arrived_at) >= start
 }
 
-function FilterSelect({ icon: Icon, value, onChange, options, label }: { icon: React.ComponentType<{ className?: string }>; value: string; onChange: (v: string) => void; options: readonly (readonly [string, string])[]; label: string }) {
-  return <label className="relative inline-flex h-10 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white pl-3 pr-8 text-[13px] font-medium shadow-sm focus-within:border-ch-brand">
-    <Icon className="size-4 text-ch-brand" /><span className="sr-only">{label}</span>
-    <select value={value} onChange={(e) => onChange(e.target.value)} className="appearance-none bg-transparent outline-none">{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-    <ChevronDown className="pointer-events-none absolute right-2.5 size-4 text-[#6b7f93]" />
-  </label>
+function FilterSelect({
+  icon: Icon,
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  value: string
+  onChange: (v: string) => void
+  options: readonly (readonly [string, string])[]
+  label: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('keydown', handleKeyDown)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+        document.removeEventListener('keydown', handleKeyDown)
+      }
+    }
+  }, [open])
+
+  const selected = options.find(([v]) => v === value)
+  const displayLabel = selected ? selected[1] : options[0]?.[1] || label
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className={`flex h-10 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-[13px] font-medium text-ch-ink shadow-sm transition hover:border-ch-brand ${
+          open ? 'border-ch-brand ring-2 ring-ch-brand/15' : ''
+        }`}
+      >
+        <Icon className="size-4 shrink-0 text-ch-brand" />
+        <span className="truncate">{displayLabel}</span>
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-[#6b7f93] transition-transform duration-150 ${
+            open ? 'rotate-180 text-ch-brand' : ''
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-[calc(100%+6px)] z-50 min-w-[200px] w-max max-w-[280px] rounded-[12px] border border-[#d3e2e8] bg-white p-1.5 shadow-lg"
+        >
+          <p className="px-2.5 py-1.5 text-[11px] font-semibold text-ch-muted">{label}</p>
+          <div className="space-y-0.5">
+            {options.map(([v, l]) => {
+              const isSelected = v === value
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onChange(v)
+                    setOpen(false)
+                  }}
+                  className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] transition hover:bg-[#eef6f8] ${
+                    isSelected ? 'bg-[#e6f6f8] font-semibold text-ch-ink' : 'text-[#33475b]'
+                  }`}
+                >
+                  <span className="truncate">{l}</span>
+                  {isSelected && <CheckCircle2 className="ml-2 size-3.5 shrink-0 text-ch-teal" />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SearchFilters({ search, setSearch, filters, setFilters, polis, onReset, onClear }: { search: string; setSearch: (v: string) => void; filters: Filters; setFilters: (f: Filters) => void; polis: string[]; onReset: () => void; onClear?: () => void }) {
@@ -50,41 +133,193 @@ function SearchFilters({ search, setSearch, filters, setFilters, polis, onReset,
   </section>
 }
 
+type SortField = 'date' | 'patient' | 'doctor' | 'diagnosis' | 'status'
+type SortOrder = 'asc' | 'desc'
+
+function SortHeader({
+  label,
+  field,
+  currentField,
+  currentOrder,
+  onSort,
+  className = '',
+}: {
+  label: string
+  field: SortField
+  currentField: SortField
+  currentOrder: SortOrder
+  onSort: (field: SortField) => void
+  className?: string
+}) {
+  const isActive = currentField === field
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(field)}
+      className={`group flex items-center gap-1.5 text-left font-semibold select-none transition hover:text-ch-brand ${
+        isActive ? 'text-ch-brand font-bold' : 'text-[#3f5468]'
+      } ${className}`}
+      title={`Urutkan ${label} (${isActive && currentOrder === 'asc' ? 'Z - A' : 'A - Z'})`}
+    >
+      <span>{label}</span>
+      {isActive ? (
+        <ArrowUp
+          className={`size-3.5 shrink-0 transition-transform duration-200 ${
+            currentOrder === 'asc' ? '' : 'rotate-180'
+          }`}
+        />
+      ) : (
+        <ArrowUpDown className="size-3 shrink-0 text-[#7f93a4]/50 transition group-hover:text-ch-brand group-hover:opacity-100" />
+      )}
+    </button>
+  )
+}
+
 export function HistoryListPage({ user, onLogout, base }: SessionProps & { base: string }) {
   const [search, setSearch] = useState('')
   const q = useDeferredValue(search)
   const [filters, setFilters] = useState<Filters>({ range: '', poli: '', status: '' })
-  const [asc, setAsc] = useState(false)
+  const [sortField, setSortField] = useState<SortField>('date')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
   const history = useQuery({ queryKey: ['history', q], queryFn: () => getHistory(q) })
   const polis = useMemo(() => [...new Set((history.data?.visits || []).map((v) => v.location.poli || v.location.name).filter(Boolean))] as string[], [history.data])
-  const rows = (history.data?.visits || [])
-    .filter((v) => matchRange(v, filters.range) && (!filters.poli || (v.location.poli || v.location.name) === filters.poli) && matchStatus(v, filters.status))
-    .sort((a, b) => (new Date(a.arrived_at || 0).getTime() - new Date(b.arrived_at || 0).getTime()) * (asc ? 1 : -1))
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortField(field)
+      setSortOrder(field === 'date' ? 'desc' : 'asc')
+    }
+  }
+
+  const rows = useMemo(() => {
+    const list = (history.data?.visits || [])
+      .filter((v) => matchRange(v, filters.range) && (!filters.poli || (v.location.poli || v.location.name) === filters.poli) && matchStatus(v, filters.status))
+
+    return list.slice().sort((a, b) => {
+      let cmp = 0
+      if (sortField === 'date') {
+        const timeA = new Date(a.arrived_at || 0).getTime()
+        const timeB = new Date(b.arrived_at || 0).getTime()
+        cmp = timeA - timeB
+      } else if (sortField === 'patient') {
+        const nameA = (a.patient?.name || '').trim()
+        const nameB = (b.patient?.name || '').trim()
+        cmp = nameA.localeCompare(nameB, 'id', { sensitivity: 'base', numeric: true })
+      } else if (sortField === 'doctor') {
+        const docA = (a.doctor || '').trim()
+        const docB = (b.doctor || '').trim()
+        cmp = docA.localeCompare(docB, 'id', { sensitivity: 'base' })
+      } else if (sortField === 'diagnosis') {
+        const diagA = (a.diagnosis || '').trim()
+        const diagB = (b.diagnosis || '').trim()
+        if (!diagA && diagB) return 1
+        if (diagA && !diagB) return -1
+        cmp = diagA.localeCompare(diagB, 'id', { sensitivity: 'base' })
+      } else if (sortField === 'status') {
+        const statA = submissionMeta(a.submission_status, a.is_approved).label
+        const statB = submissionMeta(b.submission_status, b.is_approved).label
+        cmp = statA.localeCompare(statB, 'id', { sensitivity: 'base' })
+      }
+
+      if (cmp === 0) {
+        return new Date(b.arrived_at || 0).getTime() - new Date(a.arrived_at || 0).getTime()
+      }
+
+      return sortOrder === 'asc' ? cmp : -cmp
+    })
+  }, [history.data, filters, sortField, sortOrder])
 
   return <AppShell user={user} onLogout={onLogout}>
     <PageTitle title="Riwayat Pasien" subtitle="Telusuri riwayat kunjungan seluruh pasien dan tinjau rekam medis dalam satu tempat." />
-    <SearchFilters search={search} setSearch={setSearch} filters={filters} setFilters={setFilters} polis={polis} onReset={() => { setSearch(''); setFilters({ range: '', poli: '', status: '' }) }} />
+    <SearchFilters search={search} setSearch={setSearch} filters={filters} setFilters={setFilters} polis={polis} onReset={() => { setSearch(''); setFilters({ range: '', poli: '', status: '' }); setSortField('date'); setSortOrder('desc') }} />
+    
     <section className="mt-4 rounded-[18px] border border-[#d3e2e8] bg-ch-panel p-4">
-      <div className="overflow-x-auto"><div className="min-w-[860px]">
-        <div className="grid grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center rounded-[12px] bg-[#e8f0f3] px-4 py-3.5 text-xs font-semibold text-[#3f5468]">
-          <button type="button" onClick={() => setAsc(!asc)} className="flex items-center gap-1 text-left">Tanggal <ArrowUp className={`size-3.5 transition ${asc ? '' : 'rotate-180'}`} /></button><span>Nama Pasien</span><span>Nama Dokter</span><span>Diagnosa</span><span>Status</span><span>Aksi</span>
-        </div>
-        {history.isPending ? <LoadingState label="Memuat riwayat…" /> : history.isError ? <div className="mt-4"><ErrorState message={history.error.message} onRetry={() => history.refetch()} /></div> : rows.length === 0 ? <EmptyState title={search || filters.range || filters.poli || filters.status ? 'Tidak ada hasil untuk filter ini' : 'Belum ada riwayat kunjungan'} description={search || filters.status ? 'Ubah kata kunci atau tekan Reset untuk menampilkan semua riwayat.' : 'Kunjungan yang sudah diperiksa akan tercatat di sini.'} /> : <div className="divide-y divide-[#dde8ec]">
-          {rows.map((v) => {
-            const meta = submissionMeta(v.submission_status, v.is_approved)
-            return <div key={v.id} className="grid min-h-[63px] grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center px-4 py-2.5 text-[13px]">
-              <div><p className="font-bold">{dateShort(v.arrived_at)}</p><p className="text-[11px] text-ch-muted">{timeWib(v.arrived_at)}</p></div>
-              <div className="min-w-0 pr-3"><p className="truncate font-semibold">{v.patient.name}</p><p className="text-[11px] text-ch-muted">RM {v.patient.rm_number}</p></div>
-              <div className="min-w-0 pr-3"><p className="truncate">{v.doctor || '—'}</p><p className="text-[11px] text-ch-muted">{v.location.poli || v.location.name}</p></div>
-              <p className="pr-3">{v.diagnosis || <span className="text-ch-faint">Belum ditetapkan</span>}</p>
-              <span><Badge tone={meta.tone === 'info' ? 'info' : meta.tone} icon={meta.tone === 'ok' ? <CheckCircle2 className="size-3" /> : undefined}>{meta.label}</Badge></span>
-              <Link to={`${base}/${v.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-ch-teal hover:underline">Lihat detail <ChevronRight className="size-3.5" /></Link>
+      <div className="overflow-x-auto">
+        <div className="min-w-[860px]">
+          <div className="grid grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center rounded-[12px] bg-[#e8f0f3] px-4 py-3.5 text-xs font-semibold text-[#3f5468]">
+            <SortHeader label="Tanggal" field="date" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Nama Pasien" field="patient" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Nama Dokter" field="doctor" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Diagnosa" field="diagnosis" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Status" field="status" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <span className="text-left font-semibold text-[#3f5468]">Aksi</span>
+          </div>
+
+          {history.isPending ? (
+            <LoadingState label="Memuat riwayat…" />
+          ) : history.isError ? (
+            <div className="mt-4">
+              <ErrorState message={history.error.message} onRetry={() => history.refetch()} />
             </div>
-          })}
-        </div>}
-      </div></div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              title={search || filters.range || filters.poli || filters.status ? 'Tidak ada hasil untuk filter ini' : 'Belum ada riwayat kunjungan'}
+              description={search || filters.status ? 'Ubah kata kunci atau tekan Reset untuk menampilkan semua riwayat.' : 'Kunjungan yang sudah diperiksa akan tercatat di sini.'}
+            />
+          ) : (
+            <div className="divide-y divide-[#dde8ec]">
+              {rows.map((v) => {
+                const meta = submissionMeta(v.submission_status, v.is_approved)
+                return (
+                  <div key={v.id} className="grid min-h-[63px] grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center px-4 py-2.5 text-[13px]">
+                    <div>
+                      <p className="font-bold">{dateShort(v.arrived_at)}</p>
+                      <p className="text-[11px] text-ch-muted">{timeWib(v.arrived_at)}</p>
+                    </div>
+                    <div className="min-w-0 pr-3">
+                      <p className="truncate font-semibold">{v.patient.name}</p>
+                      <p className="text-[11px] text-ch-muted">RM {v.patient.rm_number}</p>
+                    </div>
+                    <div className="min-w-0 pr-3">
+                      <p className="truncate">{v.doctor || '—'}</p>
+                      <p className="text-[11px] text-ch-muted">{v.location.poli || v.location.name}</p>
+                    </div>
+                    <p className="pr-3">{v.diagnosis || <span className="text-ch-faint">Belum ditetapkan</span>}</p>
+                    <span>
+                      <Badge tone={meta.tone === 'info' ? 'info' : meta.tone} icon={meta.tone === 'ok' ? <CheckCircle2 className="size-3" /> : undefined}>
+                        {meta.label}
+                      </Badge>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <Link
+                        to={`${base}/${v.id}`}
+                        title="Lihat Detail Rekam Medis"
+                        className="grid size-8 place-items-center rounded-[8px] border border-[#cbe3e9] bg-[#f0f9fa] text-ch-teal transition hover:border-ch-brand hover:bg-[#e1f3f6] hover:shadow-sm"
+                      >
+                        <Eye className="size-4" />
+                        <span className="sr-only">Lihat Detail</span>
+                      </Link>
+                      <button
+                        type="button"
+                        title="Edit Data Pasien"
+                        onClick={() => setEditingPatient(v.patient)}
+                        className="grid size-8 place-items-center rounded-[8px] border border-[#f3dfa6] bg-[#fdfaf1] text-[#b88018] transition hover:border-[#dfa120] hover:bg-[#fbf2da] hover:shadow-sm"
+                      >
+                        <Pencil className="size-3.5" />
+                        <span className="sr-only">Edit Pasien</span>
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
       {!!rows.length && <p className="mt-3 px-1 text-xs text-ch-muted">Menampilkan {rows.length} dari {history.data?.count ?? rows.length} kunjungan</p>}
     </section>
+
+    <EditPatientDialog
+      patient={editingPatient}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+      onSuccess={() => {
+        history.refetch()
+      }}
+    />
   </AppShell>
 }
 

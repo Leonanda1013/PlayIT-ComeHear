@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { ChevronDown, X } from 'lucide-react'
+import { Children, isValidElement, useEffect, useRef, useState } from 'react'
+import { Check as CheckIcon, ChevronDown, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /* Komponen dasar ComeHear: mengikuti DESIGN.md (panel terang, border tipis, teal untuk aksi utama). */
@@ -41,8 +41,173 @@ export function UnitInput({ unit, className, ...props }: React.InputHTMLAttribut
   return <span className="relative block"><input {...props} className={cn(inputClass, 'font-inter', unit && 'pr-16', className)} />{unit && <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] text-[#8799ad]">{unit}</span>}</span>
 }
 
-export function SelectInput({ className, children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return <span className="relative block"><select {...props} className={cn(inputClass, 'font-inter appearance-none pr-9', className)}>{children}</select><ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[#71859a]" /></span>
+export type SelectOption = {
+  value: string | number
+  label: React.ReactNode
+  subtext?: React.ReactNode
+  disabled?: boolean
+}
+
+export interface SelectInputProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'children'> {
+  children?: React.ReactNode
+  options?: readonly (readonly [string | number, React.ReactNode])[] | SelectOption[]
+  icon?: React.ComponentType<{ className?: string }>
+  menuTitle?: string
+  placeholder?: string
+}
+
+function extractOptions(nodes: React.ReactNode): SelectOption[] {
+  const result: SelectOption[] = []
+  Children.forEach(nodes, (child) => {
+    if (!isValidElement(child)) return
+    if (child.type === 'option') {
+      const { value, children: optLabel, disabled, 'data-subtext': subtext } = child.props as any
+      result.push({
+        value: value !== undefined ? value : (typeof optLabel === 'string' ? optLabel : ''),
+        label: optLabel ?? value,
+        subtext,
+        disabled,
+      })
+    } else if (child.props && (child.props as any).children) {
+      result.push(...extractOptions((child.props as any).children))
+    }
+  })
+  return result
+}
+
+export function SelectInput({
+  className,
+  children,
+  options,
+  icon: Icon,
+  menuTitle,
+  placeholder,
+  value,
+  defaultValue,
+  onChange,
+  disabled,
+  id,
+  name,
+  'aria-label': ariaLabel,
+}: SelectInputProps) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const parsedOptions: SelectOption[] = []
+  if (options && options.length > 0) {
+    for (const item of options) {
+      if (Array.isArray(item)) {
+        parsedOptions.push({ value: item[0], label: item[1] })
+      } else if (item && typeof item === 'object') {
+        parsedOptions.push(item as SelectOption)
+      }
+    }
+  } else if (children) {
+    parsedOptions.push(...extractOptions(children))
+  }
+
+  const currentValue = value !== undefined ? String(value) : defaultValue !== undefined ? String(defaultValue) : ''
+  const selectedOption = parsedOptions.find((o) => String(o.value) === currentValue)
+  const displayLabel = selectedOption ? selectedOption.label : (placeholder || parsedOptions[0]?.label || 'Pilih...')
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('keydown', handleKeyDown)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+        document.removeEventListener('keydown', handleKeyDown)
+      }
+    }
+  }, [open])
+
+  const handleSelect = (val: string | number) => {
+    setOpen(false)
+    if (onChange) {
+      const fakeEvent = {
+        target: { name: name || '', id: id || '', value: String(val) },
+        currentTarget: { name: name || '', id: id || '', value: String(val) },
+      } as unknown as React.ChangeEvent<HTMLSelectElement>
+      onChange(fakeEvent)
+    }
+  }
+
+  const titleText = menuTitle || (typeof ariaLabel === 'string' ? ariaLabel : undefined)
+
+  return (
+    <div ref={containerRef} className={cn('relative inline-block w-full', className)}>
+      <button
+        type="button"
+        id={id}
+        name={name}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className={cn(
+          'flex h-10 w-full items-center justify-between gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-[13px] font-medium text-ch-ink shadow-sm transition hover:border-ch-brand focus:border-ch-brand focus:outline-none focus:ring-2 focus:ring-ch-brand/15 disabled:cursor-not-allowed disabled:bg-[#f2f6f8] disabled:text-ch-muted',
+          open && 'border-ch-brand ring-2 ring-ch-brand/15'
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2 truncate">
+          {Icon && <Icon className="size-4 shrink-0 text-ch-brand" />}
+          <span className="truncate">{displayLabel}</span>
+        </div>
+        <ChevronDown
+          className={cn(
+            'size-3.5 shrink-0 text-[#6b7f93] transition-transform duration-150',
+            open && 'rotate-180 text-ch-brand'
+          )}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-[calc(100%+5px)] z-50 min-w-full w-max max-w-[340px] rounded-[12px] border border-[#d3e2e8] bg-white p-1.5 shadow-lg max-h-60 overflow-y-auto"
+        >
+          {titleText && (
+            <p className="px-2.5 py-1.5 text-[11px] font-semibold text-ch-muted">{titleText}</p>
+          )}
+          <div className="space-y-0.5">
+            {parsedOptions.map((opt, i) => {
+              const isSelected = String(opt.value) === currentValue
+              return (
+                <button
+                  key={`${opt.value}-${i}`}
+                  type="button"
+                  role="menuitem"
+                  disabled={opt.disabled}
+                  onClick={() => handleSelect(opt.value)}
+                  className={cn(
+                    'flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] transition hover:bg-[#eef6f8]',
+                    isSelected ? 'bg-[#e6f6f8] font-semibold text-ch-ink' : 'text-[#33475b]',
+                    opt.disabled && 'cursor-not-allowed opacity-50'
+                  )}
+                >
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate">{opt.label}</span>
+                    {opt.subtext && (
+                      <span className="truncate text-[11px] text-ch-muted">{opt.subtext}</span>
+                    )}
+                  </div>
+                  {isSelected && <CheckIcon className="ml-2 size-3.5 shrink-0 text-ch-teal" />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function TextArea({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
