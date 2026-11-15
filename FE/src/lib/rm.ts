@@ -23,6 +23,17 @@ export type NewPatient = { name: string; nik: string; birth_date: string; gender
 export const createPatient = (data: NewPatient) =>
   apiRequest<{ message: string; patient: Patient }>('/api/backend/pendaftaran/pasien', json(data))
 
+export type UpdatePatientData = {
+  name: string
+  nik?: string
+  birth_date: string
+  gender: string
+  phone?: string
+  address?: string
+}
+export const updatePatient = (id: number, data: UpdatePatientData) =>
+  apiRequest<{ message: string; patient: Patient }>(`/api/backend/pendaftaran/pasien/${id}`, json(data))
+
 export type NewVisit = { patient_id: number; visit_date: string; practitioner_id?: number; visit_type: string; admin_note: string }
 export const createVisit = (data: NewVisit) =>
   apiRequest<{ message: string; visit: { id: number; queue_no: number } }>('/api/backend/pendaftaran/kunjungan', json(data))

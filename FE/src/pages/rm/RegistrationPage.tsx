@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowRight, CheckCircle2, Mic, Search } from 'lucide-react'
+import { AlertCircle, ArrowRight, CheckCircle2, Mic, Pencil, Search } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
 import { PageTitle } from '@/components/ClinicalHeader'
+import { EditPatientDialog } from '@/components/EditPatientDialog'
 import { btn, Dialog, inputClass, Label, Notice, Panel, SelectInput, TextArea } from '@/components/ui/kit'
 import { dateLong, dateShort, initials, todayIso } from '@/lib/format'
 import { createPatient, createVisit, getLocations, getPractitioners, getRegistration, setLocation, type NewPatient } from '@/lib/rm'
@@ -40,6 +41,7 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
   const [visit, setVisit] = useState({ visit_date: todayIso(), location_id: 0, practitioner_id: 0, visit_type: 'Baru', admin_note: '' })
   const [visitErrors, setVisitErrors] = useState<Record<string, string>>({})
   const [success, setSuccess] = useState<string | null>(null)
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
 
   const registry = useQuery({ queryKey: ['registry'], queryFn: getRegistration })
   const locations = useQuery({ queryKey: ['locations'], queryFn: getLocations })
@@ -115,7 +117,10 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
               return <div key={p.id} className={`flex items-center gap-3 rounded-[12px] border bg-white px-3 py-2.5 ${active ? 'border-ch-brand ring-1 ring-ch-brand' : 'border-[#d6e3e9]'}`}>
                 <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#dff4f7] text-xs font-bold text-ch-teal">{initials(p.name)}</span>
                 <div className="min-w-0 flex-1"><p className="text-[13px] font-bold">{p.name}</p><PatientLine p={p} /></div>
-                <button type="button" onClick={() => setSelected(p)} className={`inline-flex h-7 items-center rounded-[7px] px-3 text-[11px] font-semibold ${active ? 'border border-ch-brand bg-white text-ch-teal' : 'bg-ch-brand text-white hover:bg-ch-brand-hover'}`}>{active ? 'Terpilih' : 'Pilih Pasien'}</button>
+                <div className="flex items-center gap-1.5">
+                  <button type="button" onClick={() => setEditingPatient(p)} title="Edit data pasien" className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-[#d2e1e7] bg-white px-2.5 text-[11px] font-semibold text-[#374e61] hover:border-ch-brand hover:text-ch-teal"><Pencil className="size-3" /> Edit</button>
+                  <button type="button" onClick={() => setSelected(p)} className={`inline-flex h-7 items-center rounded-[7px] px-3 text-[11px] font-semibold ${active ? 'border border-ch-brand bg-white text-ch-teal' : 'bg-ch-brand text-white hover:bg-ch-brand-hover'}`}>{active ? 'Terpilih' : 'Pilih Pasien'}</button>
+                </div>
               </div>
             })}
           </div>}
@@ -145,7 +150,10 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
     {step >= 1 && selected && <div className="mb-4 flex items-center gap-3 rounded-[14px] border border-[#8edbe6] bg-[#e6f6f8] px-4 py-3">
       <span className="grid size-9 shrink-0 place-items-center rounded-full bg-white text-xs font-bold text-ch-teal">{initials(selected.name)}</span>
       <div className="min-w-0 flex-1"><p className="text-[13px] font-bold">{selected.name}</p><PatientLine p={selected} /></div>
-      <button type="button" onClick={() => { setStep(0); setSelected(null) }} className="inline-flex h-7 items-center rounded-[7px] border border-[#8edbe6] bg-white px-3 text-[11px] font-semibold text-ch-teal">Ganti Pasien</button>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => setEditingPatient(selected)} className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-[#8edbe6] bg-white px-2.5 text-[11px] font-semibold text-ch-teal hover:bg-[#d8f4f8]"><Pencil className="size-3" /> Edit Pasien</button>
+        <button type="button" onClick={() => { setStep(0); setSelected(null) }} className="inline-flex h-7 items-center rounded-[7px] border border-[#8edbe6] bg-white px-3 text-[11px] font-semibold text-ch-teal">Ganti Pasien</button>
+      </div>
     </div>}
 
     {step === 1 && <>
@@ -180,5 +188,14 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
       <div className="text-center"><CheckCircle2 className="mx-auto size-10 text-ch-ok" /><p className="mt-3 text-sm">{success}</p><p className="mt-1 text-xs text-ch-muted">Status awal: Terjadwal. Konfirmasi kedatangan saat pasien tiba.</p></div>
       <div className="mt-5 grid gap-2 sm:grid-cols-2"><button type="button" className={btn.outline} onClick={() => { setSuccess(null); setSelected(null); setStep(0); setQuery(''); setSubmitted(''); saveVisit.reset() }}>Daftarkan pasien lain</button><button type="button" className={btn.primary} onClick={() => navigate('/rm/kunjungan')}>Lihat Daftar Kunjungan</button></div>
     </Dialog>
+
+    <EditPatientDialog
+      patient={editingPatient}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+      onSuccess={(updated) => {
+        if (selected?.id === updated.id) setSelected(updated)
+      }}
+    />
   </AppShell>
 }

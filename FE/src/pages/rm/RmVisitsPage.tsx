@@ -5,12 +5,13 @@ import { Link } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
 import { PageTitle } from '@/components/ClinicalHeader'
+import { EditPatientDialog } from '@/components/EditPatientDialog'
 import { EmptyState, ErrorState, LoadingState } from '@/components/Feedback'
 import { useConfirmArrival, VisitDetailDialog } from '@/components/RmVisitDialogs'
 import { Badge, btn, inputClass, Panel, SelectInput } from '@/components/ui/kit'
 import { dateShort, rmStatusMeta, timeWib, todayIso } from '@/lib/format'
 import { getRmVisits } from '@/lib/rm'
-import type { RmVisit } from '@/lib/types'
+import type { Patient, RmVisit } from '@/lib/types'
 
 const SCOPES = [['hari_ini', 'Hari Ini'], ['mendatang', 'Mendatang'], ['riwayat', 'Riwayat']] as const
 const PAGE = 8
@@ -29,6 +30,7 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(0)
   const [detail, setDetail] = useState<RmVisit | null>(null)
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
   const confirm = useConfirmArrival()
   const visits = useQuery({ queryKey: ['rm-visits', scope, q, scope === 'hari_ini' ? tanggal : '', status], queryFn: () => getRmVisits({ scope, q, status, tanggal: scope === 'hari_ini' ? tanggal : '' }), refetchInterval: 20_000 })
   const polis = useMemo(() => [...new Set((visits.data?.rows || []).map((r) => r.location.poli || r.location.name))], [visits.data])
@@ -85,6 +87,19 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
       </div>
     </Panel>
     {confirm.dialog}
-    <VisitDetailDialog visit={detail} onClose={() => setDetail(null)} onConfirm={confirm.open} />
+    <VisitDetailDialog
+      visit={detail}
+      onClose={() => setDetail(null)}
+      onConfirm={confirm.open}
+      onEditPatient={(p) => {
+        setDetail(null)
+        setEditingPatient(p)
+      }}
+    />
+    <EditPatientDialog
+      patient={editingPatient}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+    />
   </AppShell>
 }

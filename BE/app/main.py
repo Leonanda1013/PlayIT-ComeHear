@@ -1040,6 +1040,73 @@ async def add_patient(request: Request, user: User = Depends(require("admin", "p
     }
 
 
+@app.put("/pendaftaran/pasien/{patient_id}")
+@app.post("/pendaftaran/pasien/{patient_id}")
+async def update_patient(patient_id: int, request: Request,
+                         user: User = Depends(require("admin", "perawat", "dokter")),
+                         db: Session = Depends(get_db)):
+    p = db.get(Patient, patient_id)
+    if not p:
+        raise HTTPException(404, "Pasien tidak ditemukan.")
+    body = await _body(request)
+    name = body.get("name")
+    birth_date = body.get("birth_date")
+    gender = body.get("gender")
+    nik = str(body.get("nik") or "").strip()
+    phone = str(body.get("phone") or "").strip() or None
+    address = str(body.get("address") or "").strip() or None
+
+    if name is not None:
+        if not str(name).strip():
+            raise HTTPException(400, "Nama lengkap tidak boleh kosong.")
+        p.name = str(name).strip()
+
+    if birth_date is not None:
+        try:
+            p.birth_date = datetime.strptime(str(birth_date).strip(), "%Y-%m-%d").date()
+        except Exception:
+            raise HTTPException(400, "Format tanggal lahir harus YYYY-MM-DD.")
+
+    if gender is not None:
+        if gender in ("male", "female"):
+            p.gender = gender
+        elif gender in ("L", "P"):
+            p.gender = "male" if gender == "L" else "female"
+
+    if nik:
+        if not (nik.isdigit() and len(nik) == 16):
+            raise HTTPException(400, "NIK harus 16 digit angka.")
+        if nik != (p.nik or ""):
+            p.nik = nik
+            p.ihs_number = None
+    elif body.get("nik") == "":
+        p.nik = None
+        p.ihs_number = None
+
+    if phone is not None:
+        p.phone = phone
+    if address is not None:
+        p.address = address
+
+    msg = f"Data pasien {p.name} (RM {p.rm_number}) berhasil diperbarui."
+    if p.nik and not p.ihs_number and settings.satusehat_mode != "mock":
+        try:
+            p.ihs_number = get_client(settings).find_patient_by_nik(p.nik)
+            p.ihs_checked_at = utcnow()
+            if p.ihs_number:
+                msg += f" Nomor IHS diperbarui: {p.ihs_number}."
+        except Exception:
+            pass
+
+    audit(db, user, "update_patient", f"patient:{p.id}")
+    db.commit()
+    return {
+        "status": "ok",
+        "message": msg,
+        "patient": serialize_patient(p)
+    }
+
+
 @app.post("/pendaftaran/kunjungan")
 async def register_visit(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     body = await _body(request)

@@ -1,4 +1,4 @@
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Pencil } from 'lucide-react'
 import { Link } from 'react-router'
 import { dateId } from '@/lib/format'
 import type { Consultation, Patient } from '@/lib/types'
@@ -15,7 +15,7 @@ export function PageTitle({ title, back, subtitle, action }: { title: string; ba
   </div>
 }
 
-export function PatientIdentity({ patient, children }: { patient: Patient; children?: React.ReactNode }) {
+export function PatientIdentity({ patient, children, onEdit }: { patient: Patient; children?: React.ReactNode; onEdit?: (p: Patient) => void }) {
   const details = [
     ['No. RM', patient.rm_number],
     ['No. Telepon/WA', patient.phone || '—'],
@@ -25,9 +25,22 @@ export function PatientIdentity({ patient, children }: { patient: Patient; child
   ]
   return (
     <section className="rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[15px] pb-[15px] pt-[15px]">
-      <p className="text-[13px] font-medium leading-4 text-[#3f5468]">Informasi Pasien</p>
-      <h2 className="mt-0.5 text-[19px] font-bold leading-6 text-ch-ink">{patient.name}</h2>
-      <p className="text-[12px] leading-4 text-[#5f7284]">{patient.address || 'Alamat belum tercatat'}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[13px] font-medium leading-4 text-[#3f5468]">Informasi Pasien</p>
+          <h2 className="mt-0.5 text-[19px] font-bold leading-6 text-ch-ink">{patient.name}</h2>
+          <p className="text-[12px] leading-4 text-[#5f7284]">{patient.address || 'Alamat belum tercatat'}</p>
+        </div>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(patient)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[#d2e1e7] bg-white px-2.5 text-xs font-semibold text-[#3d5266] shadow-sm hover:border-ch-brand hover:text-ch-teal"
+          >
+            <Pencil className="size-3" /> Edit Pasien
+          </button>
+        )}
+      </div>
       <div className="mb-3 mt-[11px] border-t border-[#dce6eb]" />
       <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[160fr_282fr_160fr_282fr_140fr]">
         {details.map(([label, value]) => <div key={label} className="flex h-[62px] min-w-0 flex-col justify-center rounded-[10px] border border-[#dce6eb] bg-white px-3"><dt className="text-[12px] font-medium leading-4 text-[#3f5468]">{label}</dt><dd className="mt-1.5 truncate text-[15px] font-bold leading-5 text-ch-ink">{value}</dd></div>)}

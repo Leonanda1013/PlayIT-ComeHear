@@ -8,11 +8,12 @@ import { PageTitle, PatientIdentity } from '@/components/ClinicalHeader'
 import { EmptyState, ErrorState, LoadingState } from '@/components/Feedback'
 import { SoapSummary } from '@/components/SoapSummary'
 import { OfficialResumePrint } from '@/components/OfficialResumePrint'
+import { EditPatientDialog } from '@/components/EditPatientDialog'
 import { Badge, Panel } from '@/components/ui/kit'
 import { getConsultation, getResume, getScribe, visitPath } from '@/lib/clinical'
 import { dateShort, formatExportFileName, mmss, printResumeDocument, submissionMeta, timeWib } from '@/lib/format'
 import { getHistory } from '@/lib/rm'
-import type { HistoryVisit } from '@/lib/types'
+import type { HistoryVisit, Patient } from '@/lib/types'
 
 type Filters = { range: string; poli: string; status: string }
 const RANGES = [['', 'Semua tanggal'], ['today', 'Hari ini'], ['7', '7 hari terakhir'], ['30', '30 hari terakhir']] as const
@@ -92,6 +93,7 @@ export function HistoryDetailPage({ user, onLogout, base }: SessionProps & { bas
   const id = Number(visitId)
   const navigate = useNavigate()
   const [filters, setFilters] = useState<Filters>({ range: '', poli: '', status: '' })
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
   const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: id > 0 })
   const patient = consultation.data?.visit.patient
 
@@ -119,11 +121,19 @@ export function HistoryDetailPage({ user, onLogout, base }: SessionProps & { bas
     <div className="mt-4 space-y-4 print:mt-0 print:space-y-0">
       {consultation.isPending ? <LoadingState label="Memuat rekam medis…" /> : consultation.isError ? <ErrorState message={consultation.error.message} onRetry={() => consultation.refetch()} /> : <>
         <div className="print:hidden">
-          <PatientIdentity patient={consultation.data.visit.patient} />
+          <PatientIdentity
+            patient={consultation.data.visit.patient}
+            onEdit={user.role !== 'dokter' ? (p) => setEditingPatient(p) : undefined}
+          />
         </div>
         <RecordSummary id={id} />
       </>}
     </div>
+    <EditPatientDialog
+      patient={editingPatient}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+    />
   </AppShell>
 }
 
