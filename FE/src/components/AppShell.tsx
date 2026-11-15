@@ -64,29 +64,29 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
     <div className="min-h-screen bg-ch-bg lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
       <aside className="z-30 flex flex-col border-b border-[#d3e2e8] bg-[#f6fafb] lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r">
         <div className="flex h-[71px] shrink-0 items-center justify-between border-b border-[#d3e2e8] px-6 lg:justify-center">
-          <img src="/comehear-logo.png" alt="ComeHear AI Medical Scribe" className="h-[44px] w-[190px] object-contain" />
+          <span className="relative block h-[44px] w-[160px] overflow-hidden" role="img" aria-label="ComeHear AI Medical Scribe"><img src="/comehear-logo.png" alt="" className="absolute left-[-8px] top-[-18.7px] w-[171px] max-w-none" /></span>
           <button type="button" className="grid size-9 place-items-center rounded-lg text-ch-muted hover:bg-[#e6f1f4] lg:hidden" aria-label={menuOpen ? 'Tutup menu' : 'Buka menu'} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X className="size-5" /> : <Menu className="size-5" />}</button>
         </div>
 
-        <div className={`${menuOpen ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col px-4 pb-4 pt-7 lg:flex`}>
-          <p className="px-2 text-[11px] font-semibold tracking-[0.04em] text-[#5d6e7d]">LAYANAN KLINIS</p>
+        <div className={`${menuOpen ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col px-4 pb-[25px] pt-[30px] lg:flex`}>
+          <p className="px-2 text-[11px] font-medium tracking-[0.04em] text-[#5d6e7d]">LAYANAN KLINIS</p>
           <nav className="mt-2 space-y-1" aria-label="Menu utama">
             {nav.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.to === '/rm'} onClick={() => setMenuOpen(false)}
                 className={({ isActive }) => {
                   const active = isActive || (item.match?.some((prefix) => pathname.startsWith(prefix)) ?? false)
-                  return `flex min-h-[38px] items-center gap-2.5 rounded-[8px] px-3 text-[13px] transition-colors ${active ? 'bg-ch-brand font-semibold text-white' : 'text-[#33475b] hover:bg-[#e3f2f5]'}`
+                  return `flex min-h-[38px] items-center gap-2.5 rounded-[6px] px-2 transition-colors ${active ? 'bg-ch-brand text-[14px] font-semibold text-white' : 'text-[13px] text-[#33475b] hover:bg-[#e3f2f5]'}`
                 }}>
-                <item.icon className="size-[17px]" /> {item.label}
+                <item.icon className="size-[18px]" /> {item.label}
               </NavLink>
             ))}
           </nav>
 
-          <div className="relative mt-auto pt-6">
+          <div className="relative -mx-2 mt-auto pt-6">
             {accountOpen && <AccountPopover user={user} doctor={doctor} onClose={() => setAccountOpen(false)} onLogout={() => { setAccountOpen(false); setConfirmLogout(true) }} />}
-            <button type="button" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen} className="flex w-full items-center gap-2.5 rounded-[12px] border border-[#9fdde7] bg-[#dcf3f6] px-3 py-2.5 text-left transition hover:border-ch-brand">
+            <button type="button" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen} className="flex w-full items-center gap-2.5 h-[60px] rounded-[10px] border border-[#a8e0e8] bg-[#dcf3f6] px-3 text-left transition hover:border-ch-brand">
               <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-[18px]" /></span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-bold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">Klinik Bunga Melati</span></span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">Klinik Bunga Melati</span></span>
               {doctor ? <Settings className="size-[17px] text-[#38505e]" /> : <ChevronDown className="size-4 text-[#38505e]" />}
             </button>
           </div>
@@ -95,16 +95,16 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
 
       <div className="min-w-0 lg:col-start-2">
         <header className="sticky top-0 z-20 flex min-h-[71px] flex-wrap items-center justify-between gap-3 border-b border-[#d3e2e8] bg-[#f6fafb]/95 px-6 py-2.5 backdrop-blur">
-          <div><p className="text-[11px] font-semibold text-[#0b8597]">{subtitle ?? poli}</p><p className="text-[16px] font-bold leading-5 text-ch-ink">{title ?? room}</p></div>
-          <div className="flex items-center gap-2 text-[13px] text-ch-ink">
+          <div><p className="text-[12px] font-medium leading-4 text-[#0b8597]">{subtitle ?? poli}</p><p className="text-[18px] font-semibold leading-6 tracking-[-0.01em] text-ch-ink">{title ?? room}</p></div>
+          <div className="flex items-center gap-2 text-[14px] text-ch-ink">
             <div className="relative hidden sm:block">
-              <button type="button" onClick={() => setRoomOpen(!roomOpen)} aria-expanded={roomOpen} className="flex h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 shadow-sm hover:border-ch-brand"><Building2 className="size-4 text-ch-brand" /> {shortRoom} <ChevronDown className="size-3.5 text-[#6b7f93]" /></button>
+              <button type="button" onClick={() => setRoomOpen(!roomOpen)} aria-expanded={roomOpen} className="flex h-9 items-center gap-2 rounded-[10px] border border-[#d6e3e9] bg-white px-3 font-medium hover:border-ch-brand"><Building2 className="size-4 text-ch-brand" /> {shortRoom} <ChevronDown className="size-3.5 text-[#6b7f93]" /></button>
               {roomOpen && <div className="absolute right-0 top-11 z-40 w-64 rounded-[12px] border border-[#d3e2e8] bg-white p-1.5 shadow-lg" role="menu">
                 <p className="px-2.5 py-1.5 text-[11px] font-semibold text-ch-muted">Pilih bilik layanan</p>
                 {(locations.data || []).map((loc) => <button key={loc.id} type="button" role="menuitem" onClick={() => void chooseRoom(loc)} className={`flex w-full flex-col rounded-lg px-2.5 py-2 text-left hover:bg-[#eef6f8] ${loc.id === current?.id ? 'bg-[#e6f6f8]' : ''}`}><span className="text-[13px] font-semibold">{loc.name}</span><span className="text-[11px] text-ch-muted">{loc.poli}</span></button>)}
               </div>}
             </div>
-            <span className="hidden h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 font-semibold shadow-sm md:flex"><CalendarDays className="size-4 text-ch-brand" /> {todayLabel}</span>
+            <span className="hidden h-9 items-center gap-2 rounded-[10px] border border-[#d6e3e9] bg-white px-3 font-semibold md:flex"><CalendarDays className="size-4 text-ch-brand" /> {todayLabel}</span>
             <div className="relative">
               <button type="button" aria-label="Notifikasi" aria-expanded={bellOpen} onClick={() => setBellOpen(!bellOpen)} className="relative grid size-9 place-items-center rounded-[10px] border border-[#d2e1e7] bg-white shadow-sm hover:border-ch-brand"><Bell className="size-[17px] text-[#305165]" /><span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-[#e03131] ring-2 ring-white" /></button>
               {bellOpen && <div className="absolute right-0 top-11 z-40 w-72 rounded-[12px] border border-[#d3e2e8] bg-white p-4 text-sm shadow-lg"><p className="font-semibold">Notifikasi</p><p className="mt-1 text-xs text-ch-muted">Status kirim SATUSEHAT dan kunjungan baru akan muncul di sini.</p></div>}

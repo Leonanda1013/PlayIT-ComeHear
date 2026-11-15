@@ -66,6 +66,7 @@ export type ClinicalNote = {
   plan_text: string
   prescriptions?: Record<string, unknown>[]
   extra: Record<string, unknown>
+  updated_at?: string | null
   approved: boolean
   approved_snapshot: Record<string, unknown> | null
 }
@@ -76,6 +77,7 @@ export type Consultation = {
   consent_version: string
   visit: {
     id: number; code: string; queue_no: number | null; status: string
+    arrived_at?: string | null; called_at?: string | null; started_at?: string | null; doctor?: string | null
     patient: Patient; location: LocationRef
     consent: { given_by_name: string; version: string; given_at: string } | null
   }
