@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowUp, ArrowUpDown, AudioLines, Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Pause, Play, Printer, Search, SlidersHorizontal, Volume2, X } from 'lucide-react'
+import { ArrowUp, ArrowUpDown, AudioLines, Building2, CalendarDays, CheckCircle2, ChevronDown, Eye, Pause, Pencil, Play, Printer, Search, SlidersHorizontal, Volume2, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -181,6 +181,7 @@ export function HistoryListPage({ user, onLogout, base }: SessionProps & { base:
   const [filters, setFilters] = useState<Filters>({ range: '', poli: '', status: '' })
   const [sortField, setSortField] = useState<SortField>('date')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
   const history = useQuery({ queryKey: ['history', q], queryFn: () => getHistory(q) })
   const polis = useMemo(() => [...new Set((history.data?.visits || []).map((v) => v.location.poli || v.location.name).filter(Boolean))] as string[], [history.data])
 
@@ -234,32 +235,91 @@ export function HistoryListPage({ user, onLogout, base }: SessionProps & { base:
   return <AppShell user={user} onLogout={onLogout}>
     <PageTitle title="Riwayat Pasien" subtitle="Telusuri riwayat kunjungan seluruh pasien dan tinjau rekam medis dalam satu tempat." />
     <SearchFilters search={search} setSearch={setSearch} filters={filters} setFilters={setFilters} polis={polis} onReset={() => { setSearch(''); setFilters({ range: '', poli: '', status: '' }); setSortField('date'); setSortOrder('desc') }} />
+    
     <section className="mt-4 rounded-[18px] border border-[#d3e2e8] bg-ch-panel p-4">
-      <div className="overflow-x-auto"><div className="min-w-[860px]">
-        <div className="grid grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center rounded-[12px] bg-[#e8f0f3] px-4 py-3.5 text-xs font-semibold text-[#3f5468]">
-          <SortHeader label="Tanggal" field="date" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
-          <SortHeader label="Nama Pasien" field="patient" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
-          <SortHeader label="Nama Dokter" field="doctor" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
-          <SortHeader label="Diagnosa" field="diagnosis" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
-          <SortHeader label="Status" field="status" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
-          <span className="text-left font-semibold text-[#3f5468]">Aksi</span>
-        </div>
-        {history.isPending ? <LoadingState label="Memuat riwayat…" /> : history.isError ? <div className="mt-4"><ErrorState message={history.error.message} onRetry={() => history.refetch()} /></div> : rows.length === 0 ? <EmptyState title={search || filters.range || filters.poli || filters.status ? 'Tidak ada hasil untuk filter ini' : 'Belum ada riwayat kunjungan'} description={search || filters.status ? 'Ubah kata kunci atau tekan Reset untuk menampilkan semua riwayat.' : 'Kunjungan yang sudah diperiksa akan tercatat di sini.'} /> : <div className="divide-y divide-[#dde8ec]">
-          {rows.map((v) => {
-            const meta = submissionMeta(v.submission_status, v.is_approved)
-            return <div key={v.id} className="grid min-h-[63px] grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center px-4 py-2.5 text-[13px]">
-              <div><p className="font-bold">{dateShort(v.arrived_at)}</p><p className="text-[11px] text-ch-muted">{timeWib(v.arrived_at)}</p></div>
-              <div className="min-w-0 pr-3"><p className="truncate font-semibold">{v.patient.name}</p><p className="text-[11px] text-ch-muted">RM {v.patient.rm_number}</p></div>
-              <div className="min-w-0 pr-3"><p className="truncate">{v.doctor || '—'}</p><p className="text-[11px] text-ch-muted">{v.location.poli || v.location.name}</p></div>
-              <p className="pr-3">{v.diagnosis || <span className="text-ch-faint">Belum ditetapkan</span>}</p>
-              <span><Badge tone={meta.tone === 'info' ? 'info' : meta.tone} icon={meta.tone === 'ok' ? <CheckCircle2 className="size-3" /> : undefined}>{meta.label}</Badge></span>
-              <Link to={`${base}/${v.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-ch-teal hover:underline">Lihat detail <ChevronRight className="size-3.5" /></Link>
+      <div className="overflow-x-auto">
+        <div className="min-w-[860px]">
+          <div className="grid grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center rounded-[12px] bg-[#e8f0f3] px-4 py-3.5 text-xs font-semibold text-[#3f5468]">
+            <SortHeader label="Tanggal" field="date" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Nama Pasien" field="patient" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Nama Dokter" field="doctor" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Diagnosa" field="diagnosis" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <SortHeader label="Status" field="status" currentField={sortField} currentOrder={sortOrder} onSort={handleSort} />
+            <span className="text-left font-semibold text-[#3f5468]">Aksi</span>
+          </div>
+
+          {history.isPending ? (
+            <LoadingState label="Memuat riwayat…" />
+          ) : history.isError ? (
+            <div className="mt-4">
+              <ErrorState message={history.error.message} onRetry={() => history.refetch()} />
             </div>
-          })}
-        </div>}
-      </div></div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              title={search || filters.range || filters.poli || filters.status ? 'Tidak ada hasil untuk filter ini' : 'Belum ada riwayat kunjungan'}
+              description={search || filters.status ? 'Ubah kata kunci atau tekan Reset untuk menampilkan semua riwayat.' : 'Kunjungan yang sudah diperiksa akan tercatat di sini.'}
+            />
+          ) : (
+            <div className="divide-y divide-[#dde8ec]">
+              {rows.map((v) => {
+                const meta = submissionMeta(v.submission_status, v.is_approved)
+                return (
+                  <div key={v.id} className="grid min-h-[63px] grid-cols-[130px_1.3fr_1fr_1.2fr_170px_110px] items-center px-4 py-2.5 text-[13px]">
+                    <div>
+                      <p className="font-bold">{dateShort(v.arrived_at)}</p>
+                      <p className="text-[11px] text-ch-muted">{timeWib(v.arrived_at)}</p>
+                    </div>
+                    <div className="min-w-0 pr-3">
+                      <p className="truncate font-semibold">{v.patient.name}</p>
+                      <p className="text-[11px] text-ch-muted">RM {v.patient.rm_number}</p>
+                    </div>
+                    <div className="min-w-0 pr-3">
+                      <p className="truncate">{v.doctor || '—'}</p>
+                      <p className="text-[11px] text-ch-muted">{v.location.poli || v.location.name}</p>
+                    </div>
+                    <p className="pr-3">{v.diagnosis || <span className="text-ch-faint">Belum ditetapkan</span>}</p>
+                    <span>
+                      <Badge tone={meta.tone === 'info' ? 'info' : meta.tone} icon={meta.tone === 'ok' ? <CheckCircle2 className="size-3" /> : undefined}>
+                        {meta.label}
+                      </Badge>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <Link
+                        to={`${base}/${v.id}`}
+                        title="Lihat Detail Rekam Medis"
+                        className="grid size-8 place-items-center rounded-[8px] border border-[#cbe3e9] bg-[#f0f9fa] text-ch-teal transition hover:border-ch-brand hover:bg-[#e1f3f6] hover:shadow-sm"
+                      >
+                        <Eye className="size-4" />
+                        <span className="sr-only">Lihat Detail</span>
+                      </Link>
+                      <button
+                        type="button"
+                        title="Edit Data Pasien"
+                        onClick={() => setEditingPatient(v.patient)}
+                        className="grid size-8 place-items-center rounded-[8px] border border-[#f3dfa6] bg-[#fdfaf1] text-[#b88018] transition hover:border-[#dfa120] hover:bg-[#fbf2da] hover:shadow-sm"
+                      >
+                        <Pencil className="size-3.5" />
+                        <span className="sr-only">Edit Pasien</span>
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
       {!!rows.length && <p className="mt-3 px-1 text-xs text-ch-muted">Menampilkan {rows.length} dari {history.data?.count ?? rows.length} kunjungan</p>}
     </section>
+
+    <EditPatientDialog
+      patient={editingPatient}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+      onSuccess={() => {
+        history.refetch()
+      }}
+    />
   </AppShell>
 }
 
