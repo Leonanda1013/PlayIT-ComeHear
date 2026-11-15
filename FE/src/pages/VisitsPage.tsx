@@ -13,15 +13,15 @@ const tabs = [
   { key: 'selanjutnya', label: 'Selanjutnya' }, { key: 'menunggu', label: 'Menunggu' }, { key: 'selesai', label: 'Selesai' },
 ] as const
 
-function statusMeta(visit: Visit) {
+function statusMeta(visit: Visit, isCurrent: boolean) {
   if (visit.state === 'selesai') return ['Selesai', 'border-[#39b77d] bg-[#e8f8f0] text-[#13734d]']
-  if (visit.state === 'saat_ini') return ['Antrean saat ini', 'border-[#1687ff] bg-[#e8f4ff] text-[#0874df]']
+  if (isCurrent) return ['Antrean saat ini', 'border-[#1687ff] bg-[#e8f4ff] text-[#0874df]']
   if (visit.state === 'selanjutnya') return ['Pasien Selanjutnya', 'border-[#76d3df] bg-[#dcf6f9] text-[#087a8b]']
   return ['Menunggu', 'border-[#cbd8e3] bg-[#edf2f6] text-[#52677b]']
 }
 
-function StatusPill({ visit }: { visit: Visit }) {
-  const [label, style] = statusMeta(visit)
+function StatusPill({ visit, isCurrent }: { visit: Visit; isCurrent: boolean }) {
+  const [label, style] = statusMeta(visit, isCurrent)
   return <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${style}`}>{label}</span>
 }
 
@@ -87,13 +87,12 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: { user: User; o
           <div className="overflow-x-auto">
             <div className="min-w-[800px] divide-y divide-[#d7e5ea]">
               {rows.map((visit, index) => {
-                const current = visit.state === 'saat_ini' || visit.id === activeId
-                const canCall = visit.state === 'selanjutnya'
+                const current = visit.id === activeId
                 const isDraftSaved = visit.state === 'selesai' || visit.has_note || visit.draft_status === 'Tersimpan' || visit.draft_status === 'Draf tersimpan'
-                const prevWasCurrent = index > 0 && (rows[index - 1].state === 'saat_ini' || rows[index - 1].id === activeId)
+                const prevWasCurrent = index > 0 && rows[index - 1].id === activeId
                 return <article key={visit.id} className={`relative grid grid-cols-[52px_150px_minmax(280px,1fr)_170px_170px] items-center px-4 py-4 text-sm ${current ? 'my-1 min-h-[112px] rounded-2xl !border-2 !border-[#0ea5b7] bg-white shadow-[0_4px_0_#b5e7ed] z-10' : `min-h-[66px] ${prevWasCurrent ? '!border-t-0' : ''}`}`}>
                   <span className="font-bold text-[#142a40]">{String(visit.queue_no ?? (visit as { queue_number?: number }).queue_number ?? 0).padStart(3, '0')}</span>
-                  <StatusPill visit={visit} />
+                  <StatusPill visit={visit} isCurrent={current} />
                   <div className="min-w-0 pr-4"><p className="truncate font-bold text-[#102a43]">{visit.patient.name}</p><p className="mt-0.5 truncate text-xs text-[#516575]">{patientMeta(visit)}</p></div>
                   <span className={`w-fit rounded-full border px-2.5 py-1 text-[11px] font-semibold ${isDraftSaved ? 'border-[#a7dfca] bg-[#e6f7ef] text-[#157153]' : 'border-[#cad9e3] bg-[#edf3f6] text-[#52697d]'}`}>{isDraftSaved ? 'Tersimpan' : 'Belum ada draf'}</span>
                   <div className="flex items-center justify-center gap-2">
@@ -114,7 +113,7 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: { user: User; o
                         </Button>
                       </div>
                     ) : (
-                      <Button variant="outline" className={`h-9 rounded-lg px-4 text-xs font-semibold ${canCall ? 'border-[#75d6e3] text-[#078fa3] hover:bg-[#e6f7fa]' : 'border-[#d8e2e7] text-[#b9cad5] bg-transparent opacity-60 cursor-not-allowed'}`} disabled={!canCall || call.isPending} onClick={() => call.mutate(visit.id)}>
+                      <Button variant="outline" className="h-9 rounded-lg border-[#75d6e3] px-4 text-xs font-semibold text-[#078fa3] hover:bg-[#e6f7fa]" disabled={call.isPending} onClick={() => call.mutate(visit.id)}>
                         Panggil
                       </Button>
                     )}
