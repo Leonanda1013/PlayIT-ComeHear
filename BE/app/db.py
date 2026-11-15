@@ -11,8 +11,27 @@ class Base(DeclarativeBase):
 
 
 def make_engine(url: str):
+    # Normalisasi URI PostgreSQL / Supabase
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg2://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+
     is_sqlite = url.startswith("sqlite")
-    engine = create_engine(url, connect_args={"check_same_thread": False} if is_sqlite else {})
+    engine_kwargs = {}
+    if is_sqlite:
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        # Menjamin SSL aktif untuk koneksi cloud Supabase
+        if "sslmode" not in url:
+            url += ("&" if "?" in url else "?") + "sslmode=require"
+        # Pengaturan pooling tangguh untuk Supabase (Supavisor / Direct)
+        engine_kwargs["pool_pre_ping"] = True
+        engine_kwargs["pool_recycle"] = 300
+        engine_kwargs["pool_size"] = 10
+        engine_kwargs["max_overflow"] = 20
+
+    engine = create_engine(url, **engine_kwargs)
     if is_sqlite:
         @event.listens_for(engine, "connect")
         def _fk_on(dbapi_conn, _):

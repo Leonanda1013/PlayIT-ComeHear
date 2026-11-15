@@ -21,6 +21,9 @@ def add_missing_columns(engine: Engine) -> list[str]:
                 if col.name in existing:
                     continue
                 ddl_type = col.type.compile(dialect=engine.dialect)
-                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl_type}'))
-                added.append(f"{table.name}.{col.name}")
+                try:
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl_type}'))
+                    added.append(f"{table.name}.{col.name}")
+                except Exception:
+                    pass
     return added
