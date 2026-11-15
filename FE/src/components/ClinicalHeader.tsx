@@ -24,13 +24,13 @@ export function PatientIdentity({ patient, children }: { patient: Patient; child
     ['Jenis Kelamin', patient.gender_label || '—'],
   ]
   return (
-    <section className="rounded-[16px] border border-[#d3e2e8] bg-ch-panel p-4">
-      <p className="text-xs font-medium text-[#3f5468]">Informasi Pasien</p>
-      <h2 className="text-[18px] font-bold leading-6 text-ch-ink">{patient.name}</h2>
-      <p className="text-xs text-[#6b7f93]">{patient.address || 'Alamat belum tercatat'}</p>
-      <div className="my-3 border-t border-[#d7e4e9]" />
-      <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1.85fr_1fr_1.85fr_.9fr]">
-        {details.map(([label, value]) => <div key={label} className="min-w-0 rounded-[10px] border border-[#d6e3e9] bg-white px-3 py-2.5"><dt className="text-[11px] text-[#526578]">{label}</dt><dd className="mt-0.5 truncate text-sm font-bold text-ch-ink">{value}</dd></div>)}
+    <section className="rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[15px] pb-[15px] pt-[15px]">
+      <p className="text-[13px] font-medium leading-4 text-[#3f5468]">Informasi Pasien</p>
+      <h2 className="mt-0.5 text-[19px] font-bold leading-6 text-ch-ink">{patient.name}</h2>
+      <p className="text-[12px] leading-4 text-[#5f7284]">{patient.address || 'Alamat belum tercatat'}</p>
+      <div className="mb-3 mt-[11px] border-t border-[#dce6eb]" />
+      <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[160fr_282fr_160fr_282fr_140fr]">
+        {details.map(([label, value]) => <div key={label} className="flex h-[62px] min-w-0 flex-col justify-center rounded-[10px] border border-[#dce6eb] bg-white px-3"><dt className="text-[12px] font-medium leading-4 text-[#3f5468]">{label}</dt><dd className="mt-1.5 truncate text-[15px] font-bold leading-5 text-ch-ink">{value}</dd></div>)}
       </dl>
       {children}
     </section>

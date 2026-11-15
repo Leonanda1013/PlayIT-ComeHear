@@ -36,14 +36,22 @@ export function TranscriptPanel({ transcript, patientName, doctorName, empty, ba
   </Panel>
 }
 
-export function TranscriptBubble({ segment, patientName, doctorName }: { segment: TranscriptSegment; patientName: string; doctorName?: string }) {
+/** "Vincentius Leonanda Prabowo" -> "Vincentius L. Prabowo" (seperti label di desain). */
+export function shortName(name: string) {
+  const parts = name.trim().split(/\s+/)
+  return parts.length <= 2 ? name : `${parts[0]} ${parts.slice(1, -1).map((p) => `${p[0]}.`).join(' ')} ${parts.at(-1)}`
+}
+
+export function TranscriptBubble({ segment, patientName, doctorName }: { segment: TranscriptSegment; patientName: string; doctorName?: string | null }) {
   const isDoctor = segment.speaker === 'doctor' || segment.speaker === 'dokter'
-  const label = isDoctor ? `Dokter${doctorName ? ` (${doctorName})` : ''}` : segment.speaker === 'guardian' ? 'Pendamping pasien' : `Pasien (${patientName})`
-  return <div className={`flex items-start gap-2 ${isDoctor ? 'flex-row-reverse' : ''}`}>
-    <span className={`mt-1 grid size-[22px] shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ${isDoctor ? 'bg-[#102a43]' : 'bg-ch-brand'}`}>{isDoctor ? 'D' : 'P'}</span>
-    <div className={`max-w-[82%] rounded-[10px] border px-3 py-2 ${isDoctor ? 'border-[#d3e1e7] bg-[#f0f4f6]' : 'border-[#b9e6ec] bg-[#e5f7f9]'}`}>
-      <p className={`text-[11px] font-semibold ${isDoctor ? 'text-[#34495d]' : 'text-[#0a97aa]'}`}>{label}</p>
-      <p className="mt-0.5 text-[13px] leading-5 text-ch-ink">{segment.text}</p>
+  const label = isDoctor ? `Dokter${doctorName ? ` (${doctorName})` : ''}` : segment.speaker === 'guardian' ? 'Pendamping pasien' : `Pasien (${shortName(patientName)})`
+  const avatar = (letter: string, color: string) => <span className={`mt-[11px] grid size-[22px] place-items-center rounded-full text-[11px] font-bold text-white ${color}`}>{letter}</span>
+  return <div className="grid grid-cols-[22px_minmax(0,1fr)_22px] items-start gap-x-[13px]">
+    {isDoctor ? <span /> : avatar('P', 'bg-ch-brand')}
+    <div className={`rounded-[8px] border px-3 py-[9px] ${isDoctor ? 'mr-[10px] border-[#dce4e9] bg-[#f1f4f6]' : 'mr-[8px] border-[#c8eaf0] bg-[#e6f6f9]'}`}>
+      <p className={`text-[12px] font-semibold leading-4 ${isDoctor ? 'text-[#1f3346]' : 'text-[#0a97aa]'}`}>{label}</p>
+      <p className="mt-1 text-[14px] leading-[18px] text-ch-ink">{segment.text}</p>
     </div>
+    {isDoctor ? avatar('D', 'bg-[#0d2a40]') : <span />}
   </div>
 }
