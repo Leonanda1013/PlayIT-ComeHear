@@ -1,6 +1,7 @@
 import type { ClinicalNote, Consultation, Resume } from '@/lib/types'
 import { dateId, dateShort } from '@/lib/format'
 import { formatWib } from '@/lib/clinical'
+import { DEFAULT_CLINIC_CONFIG, type ClinicConfig } from '@/lib/clinicConfig'
 
 type ApExtra = {
   tindakan?: string
@@ -21,11 +22,14 @@ export function OfficialResumePrint({
   consultation,
   resume,
   doctorName,
+  clinic: customClinic,
 }: {
   consultation: Consultation
   resume?: Resume | null
   doctorName?: string
+  clinic?: Partial<ClinicConfig>
 }) {
+  const clinic: ClinicConfig = { ...DEFAULT_CLINIC_CONFIG, ...customClinic }
   const { visit, note } = consultation
   const patient = visit.patient
   const location = visit.location
@@ -54,45 +58,54 @@ export function OfficialResumePrint({
 
   return (
     <div className="official-resume-doc text-black bg-white mx-auto font-sans leading-normal">
-      {/* ===================== KOP SURAT RESMI ===================== */}
-      <header className="border-b-[3px] border-black pb-2 mb-1">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+      {/* ===================== KOP SURAT RESMI (2 KOLOM) ===================== */}
+      <header className="pb-3 pt-1">
+        <div className="flex items-center justify-between gap-6">
+          {/* Kolom Kiri: Logo ComeHear Proporsional */}
+          <div className="flex shrink-0 items-center">
             <img
               src="/comehear-logo.png"
-              alt="Logo Faskes"
-              className="h-12 w-auto object-contain print:block"
+              alt="ComeHear Medical Scribe"
+              className="h-[58px] max-h-[64px] w-auto object-contain print:block"
             />
           </div>
-          <div className="text-right flex-1">
-            <h1 className="text-[17px] font-black uppercase tracking-wider text-neutral-900 leading-tight">
-              KLINIK PRATAMA COMEHEAR
+
+          {/* Kolom Kanan: Identitas Klinik dengan Hierarki Tipografi Jelas */}
+          <div className="text-right flex-1 min-w-0">
+            <h1 className="text-[18px] sm:text-[19px] font-black uppercase tracking-wider text-neutral-900 leading-tight">
+              {clinic.name}
             </h1>
-            <p className="text-[10px] font-semibold text-neutral-700 tracking-wide">
-              LAYANAN KESEHATAN RAWAT JALAN &amp; REKAM MEDIS ELEKTRONIK
+            <p className="text-[10px] font-bold text-neutral-700 tracking-wide uppercase mt-0.5">
+              {clinic.serviceType}
             </p>
-            <p className="text-[9.5px] text-neutral-600 mt-0.5">
-              Jl. Prof. Dr. Satrio No. 18, Setiabudi, Jakarta Selatan 12940 · Telp: (021) 2995-1000
+            <p className="text-[9.5px] text-neutral-600 mt-1 leading-snug">
+              {clinic.address}
             </p>
-            <p className="text-[9px] text-neutral-500">
-              Izin Operasional: 445/012/K-PRATAMA/DPMPTSP/2023 · Kode Faskes Kemenkes: 317101234
+            <p className="text-[9px] text-neutral-600 leading-snug">
+              Telepon: {clinic.phone} · Email: {clinic.email}
+            </p>
+            <p className="text-[8.5px] font-medium text-neutral-500 mt-0.5 leading-snug">
+              Izin Operasional: {clinic.licenseNumber} · Kode Faskes Kemenkes: {clinic.faskesCode}
             </p>
           </div>
         </div>
       </header>
-      <div className="border-b border-black mb-3.5" />
+
+      {/* Garis Pemisah Elegan Kop Surat (Double Line Border) */}
+      <div className="border-b-[2.5px] border-neutral-900" />
+      <div className="border-b border-neutral-600 mt-[2px] mb-4" />
 
       {/* ===================== JUDUL DOKUMEN ===================== */}
-      <div className="text-center mb-3">
-        <h2 className="text-[14px] font-extrabold tracking-wider uppercase text-neutral-900">
+      <div className="text-center mb-4">
+        <h2 className="text-[13.5px] font-black tracking-wider uppercase text-neutral-900">
           RINGKASAN REKAM MEDIS RAWAT JALAN (RESUME MEDIS)
         </h2>
-        <div className="flex items-center justify-center gap-3 text-[10px] text-neutral-600 mt-0.5">
+        <div className="flex items-center justify-center gap-2.5 text-[9.5px] text-neutral-600 mt-1">
           <span>Standar Permenkes RI No. 24 Tahun 2022</span>
           <span>·</span>
-          <span>No. Registrasi: <b className="font-mono text-neutral-900">{visit.code}</b></span>
+          <span>No. Registrasi: <b className="font-mono text-neutral-900 font-bold">{visit.code}</b></span>
           <span>·</span>
-          <span className={`font-semibold px-2 py-0.2 rounded ${isApproved ? 'bg-neutral-100 text-neutral-900' : 'bg-amber-100 text-amber-900'}`}>
+          <span className={`font-semibold px-2 py-0.5 rounded text-[9px] ${isApproved ? 'bg-neutral-100 text-neutral-800 border border-neutral-300' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
             {isApproved ? 'DOKUMEN RESMI (TERVALIDASI)' : 'DRAF (BELUM DIVALIDASI DPJP)'}
           </span>
         </div>
