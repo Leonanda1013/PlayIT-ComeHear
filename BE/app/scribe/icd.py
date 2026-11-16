@@ -1,20 +1,29 @@
-"""Usulan ICD-10 dari anamnesis (S) dengan retrieval cerdas + pemilihan LLM.
+"""Katalog & Mesin Pencarian Cerdas ICD-10 untuk SATUSEHAT.
 
-Peningkatan algoritma retrieval:
-- Pemetaan sinonim medis terbalik (reverse mapping) untuk istilah Indonesia/Jawa/Inggris;
-- Ekspansi kata kunci otomatis (mis. "kejang" -> convulsion/febrile, "diare" -> diarrhoea/gastroenteritis);
-- Pencocokan multi-tier: exact code match, code prefix, exact phrase, whole-word, dan stem match;
-- Bobot co-occurrence: kandidat yang mencakup beberapa kata kunci sekaligus mendapat skor eksponensial;
-- Kode spesifik (turunan 4-karakter bertitik) diprioritaskan saat skor kata kunci seimbang;
-- Post-processing: deduping kode induk vs turunan (A01 dibuang jika A01.0 dipilih) dan validasi katalog resmi.
+Fitur:
+- Pembaca katalog resmi ICD-10 SATUSEHAT (load_icd, icd_table);
+- Pemetaan sinonim medis terbalik (Indonesian/Javanese -> istilah resmi ICD-10 WHO/SATUSEHAT);
+- Indeks TF-IDF lokal dengan pencocokan awalan (prefix match) & direct code matching;
+- Pengecualian otomatis kode penyebab eksternal (V, W, X, Y) agar tidak menjadi usulan diagnosis primer;
+- Post-processing: deduping kode induk vs turunan spesifik (mis. A01 dibuang jika A01.0 terpilih).
 """
 import csv
+import math
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 
 from app.config import Settings
+
+# Pengecualian awalan kode penyebab eksternal (Bab XX ICD-10: V01-Y98)
+KECUALIKAN_AWALAN_KODE = ("V", "W", "X", "Y")
+JUMLAH_KANDIDAT = 30
+
+STOPWORDS = {
+    "and", "the", "with", "without", "other", "not", "elsewhere", "classified",
+    "due", "for", "from", "site", "type", "specified", "unspecified",
+}
 
 
 @dataclass(frozen=True)
@@ -29,18 +38,20 @@ def load_icd(path: str) -> tuple[IcdRow, ...]:
         sample = f.read(4096)
         f.seek(0)
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
-        rows = [IcdRow(r["CODE"].strip(), r["DISPLAY"].strip()) for r in csv.DictReader(f, dialect=dialect)
-                if r.get("CODE") and r.get("DISPLAY")]
+        rows = [
+            IcdRow(r["CODE"].strip(), r["DISPLAY"].strip())
+            for r in csv.DictReader(f, dialect=dialect)
+            if r.get("CODE") and r.get("DISPLAY")
+        ]
     return tuple(rows)
 
 
 def icd_table(s: Settings) -> tuple[IcdRow, ...]:
-    path = s.icd10_csv if Path(s.icd10_csv).exists() else s.icd10_seed_csv
-    return load_icd(str(path))
+    return load_icd(str(s.icd10_csv))
 
 
-# Pemetaan sinonim medis terbalik (reverse mapping): istilah bahasa Indonesia/Jawa/Inggris
-# yang dipetakan ke kata kunci pencarian resmi di kamus ICD-10 WHO/SATUSEHAT.
+# Pemetaan sinonim medis terbalik: istilah bahasa Indonesia/Jawa/sehari-hari
+# ke kata kunci resmi di katalog ICD-10 SATUSEHAT / WHO.
 MEDICAL_SYNONYMS: dict[str, tuple[str, ...]] = {
     # Demam & Infeksi Sistemik
     "fever": ("fever", "febris", "pyrexia"),
@@ -147,7 +158,6 @@ MEDICAL_SYNONYMS: dict[str, tuple[str, ...]] = {
 
 def _stem(kw: str) -> str:
     kw = kw.lower().strip()
-    # Penyelarasan ejaan British vs American (diarrhea/diarrhoea, anaemia/anemia)
     kw = kw.replace("oe", "o").replace("ae", "e")
     return kw[: max(4, len(kw) - 2)] if len(kw) > 5 else kw
 
@@ -165,14 +175,12 @@ def expand_keywords(keywords: list[str]) -> list[str]:
             expanded.append(clean)
             seen.add(clean)
 
-        # Cek sinonim per entri utuh
         for syn in MEDICAL_SYNONYMS.get(clean, ()):
             s_clean = syn.lower().strip()
             if s_clean and s_clean not in seen:
                 expanded.append(s_clean)
                 seen.add(s_clean)
 
-        # Jika entri terdiri dari beberapa kata, cek tiap kata terpisah
         words = clean.split()
         if len(words) > 1:
             for w in words:
@@ -188,84 +196,105 @@ def expand_keywords(keywords: list[str]) -> list[str]:
     return expanded
 
 
+def tokenisasi(teks: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z]+", teks.lower()) if len(t) >= 3 and t not in STOPWORDS]
+
+
+class IndeksICD10:
+    """Indeks pencarian cepat untuk katalog ICD-10 menggunakan inverted index TF-IDF."""
+
+    def __init__(self, rows: tuple[IcdRow, ...]):
+        pasangan = [
+            (r.code.strip(), r.display.strip())
+            for r in rows
+            if r.code and r.display and not r.code.strip().upper().startswith(KECUALIKAN_AWALAN_KODE)
+        ]
+        self.kode = [k for k, _ in pasangan]
+        self.display = [d for _, d in pasangan]
+        self.inverted = defaultdict(set)
+        self.n_token = []
+        for i, teks in enumerate(self.display):
+            toks = tokenisasi(teks)
+            self.n_token.append(max(1, len(toks)))
+            for t in set(toks):
+                self.inverted[t].add(i)
+        n = len(self.display)
+        self.idf = {t: 1.0 + math.log((n + 1) / (len(ids) + 1)) for t, ids in self.inverted.items()}
+        self.vocab = list(self.inverted)
+
+    def _cocok(self, qt: str):
+        if len(qt) < 5:
+            vocab_cocok = [qt] if qt in self.inverted else []
+        else:
+            awalan = qt[: max(5, len(qt) - 3)]
+            vocab_cocok = [v for v in self.vocab if v.startswith(awalan)]
+        baris = set()
+        for v in vocab_cocok:
+            baris |= self.inverted[v]
+        return baris, max((self.idf[v] for v in vocab_cocok), default=0.0)
+
+    def cari(self, keywords: list[str], top_n: int = JUMLAH_KANDIDAT) -> list[tuple[str, str]]:
+        skor = defaultdict(float)
+        for kw in keywords:
+            kw_clean = kw.strip().upper()
+            # Kecocokan langsung jika kata kunci berupa kode ICD (mis. "A01", "R50.9")
+            if re.match(r"^[A-Z]\d{2}(\.\d+)?$", kw_clean):
+                for i, c in enumerate(self.kode):
+                    if c == kw_clean:
+                        skor[i] += 25.0
+                    elif c.startswith(kw_clean + ".") or kw_clean.startswith(c + "."):
+                        skor[i] += 15.0
+                continue
+
+            qtoks = list(dict.fromkeys(tokenisasi(kw)))
+            if not qtoks:
+                continue
+            hasil_tok = [self._cocok(qt) for qt in qtoks]
+            semua = set.intersection(*(b for b, _ in hasil_tok)) if len(qtoks) > 1 else set()
+            for baris, bobot in hasil_tok:
+                for i in (baris & semua if semua else baris):
+                    skor[i] += bobot
+            for i in semua:
+                skor[i] += 2.0
+
+        urut = sorted(skor, key=lambda i: skor[i] / (self.n_token[i] ** 0.5), reverse=True)[:top_n]
+        return [(self.kode[i], self.display[i]) for i in urut]
+
+
+@lru_cache(maxsize=4)
+def get_icd_index(rows: tuple[IcdRow, ...]) -> IndeksICD10:
+    return IndeksICD10(rows)
+
+_indeks_dari_rows = get_icd_index
+
+
 def retrieve(rows: tuple[IcdRow, ...], keywords: list[str], limit: int = 50) -> list[IcdRow]:
+    """Pencarian kandidat ICD-10 dengan ekspansi sinonim dan perankingan TF-IDF."""
     all_kws = expand_keywords(keywords)
     if not all_kws:
         return []
-
-    # Pisahkan keyword yang berbentuk kode ICD (mis. "R50", "A01.0") dan keyword teks
-    code_kws = [k.upper() for k in all_kws if re.match(r"^[A-Z]\d{2}(\.\d+)?$", k, re.I)]
-    text_kws = [k for k in all_kws if not re.match(r"^[A-Z]\d{2}(\.\d+)?$", k, re.I)]
-
-    # Siapkan pola regex untuk text keywords
-    text_pats = []
-    for k in text_kws:
-        stem = _stem(k)
-        if stem:
-            # Pola: kata utuh dan awalan stem
-            text_pats.append((k, stem, re.compile(rf"\b{re.escape(k)}\b"), re.compile(rf"\b{re.escape(stem)}")))
-
-    scored = []
-    for row in rows:
-        row_code_upper = row.code.upper()
-        disp = row.display.lower().replace("oe", "o").replace("ae", "e")
-
-        score = 0.0
-        hits = 0
-
-        # 1. Kecocokan langsung kode ICD
-        for ck in code_kws:
-            if row_code_upper == ck:
-                score += 15.0
-                hits += 1
-            elif row_code_upper.startswith(ck + ".") or ck.startswith(row_code_upper + "."):
-                score += 8.0
-                hits += 1
-
-        # 2. Kecocokan teks pada display
-        matched_kw_stems = set()
-        for raw_k, stem, exact_pat, stem_pat in text_pats:
-            if " " in raw_k and raw_k in disp:
-                # Kecocokan frasa multi-kata utuh (mis. "typhoid fever", "upper respiratory")
-                score += 5.0
-                hits += 1
-                matched_kw_stems.add(stem)
-            elif exact_pat.search(disp):
-                score += 3.0
-                hits += 1
-                matched_kw_stems.add(stem)
-            elif stem_pat.search(disp):
-                score += 1.5
-                hits += 1
-                matched_kw_stems.add(stem)
-
-        # 3. Bonus coverage (berapa banyak konsep kata kunci berbeda yang berhasil cocok)
-        n_unique_matches = len(matched_kw_stems)
-        if n_unique_matches > 1:
-            score += (n_unique_matches ** 1.5) * 2.0
-
-        # 4. Sedikit bonus untuk kode spesifik (bertitik, mis. A01.0 vs A01)
-        if "." in row_code_upper:
-            score += 0.2
-
-        if score > 0.0:
-            # Urutan: skor tertinggi (-score), lalu display terpendek/paling ringkas, lalu kode
-            scored.append((-score, len(row.display), row.code, row))
-
-    scored.sort()
-    return [r for *_, r in scored[:limit]]
+    idx = get_icd_index(rows)
+    kandidat = idx.cari(all_kws, top_n=limit)
+    by_code = {r.code: r for r in rows}
+    return [by_code[code] for code, _ in kandidat if code in by_code]
 
 
 def postprocess(picks, rows: tuple[IcdRow, ...], k: int = 3) -> list[dict]:
-    by_code = {r.code: r for r in rows}
+    """Filter usulan: buang kode invalid/eksternal dan deduping kode induk vs turunan spesifik."""
+    by_code = {r.code: r for r in rows if not r.code.upper().startswith(KECUALIKAN_AWALAN_KODE)}
     chosen: list[dict] = []
     for p in sorted(picks, key=lambda p: -p.keyakinan):
         code = p.code.strip().upper()
         if code not in by_code or any(c["code"] == code for c in chosen):
             continue
         deskripsi = getattr(p, "deskripsi_id", "").strip() or by_code[code].display
-        chosen.append({"code": code, "display": by_code[code].display, "deskripsi_id": deskripsi,
-                       "keyakinan": round(max(0.0, min(1.0, p.keyakinan)), 2), "alasan": p.alasan})
+        chosen.append({
+            "code": code,
+            "display": by_code[code].display,
+            "deskripsi_id": deskripsi,
+            "keyakinan": round(max(0.0, min(1.0, p.keyakinan)), 2),
+            "alasan": p.alasan,
+        })
     codes = {c["code"] for c in chosen}
     chosen = [c for c in chosen if not any(o != c["code"] and o.startswith(c["code"] + ".") for o in codes)]
     return chosen[:k]

@@ -31,7 +31,7 @@ def test_parse_text_transcript_roles():
 
 
 def test_icd_retrieval_ranks_symptom_codes_and_dedupes(settings):
-    rows = load_icd(str(settings.icd10_seed_csv))
+    rows = load_icd(str(settings.icd10_csv))
     found = [r.code for r in retrieve(rows, ["fever", "headache", "typhoid"])]
     assert "R50.9" in found and "R51" in found and "A01.0" in found
     picks = [IcdPick(code="A01", deskripsi_id="", keyakinan=0.7, alasan=""),
@@ -41,7 +41,7 @@ def test_icd_retrieval_ranks_symptom_codes_and_dedupes(settings):
 
 
 def test_icd_synonym_expansion_and_code_search(settings):
-    rows = load_icd(str(settings.icd10_seed_csv))
+    rows = load_icd(str(settings.icd10_csv))
     # Test Indonesian reverse mapping: "diare" / "mencret" -> A09
     diare_found = [r.code for r in retrieve(rows, ["diare", "mencret"])]
     assert "A09" in diare_found

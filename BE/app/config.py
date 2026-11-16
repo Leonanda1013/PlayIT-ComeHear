@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Jakarta"
     audio_dir: Path = BASE_DIR / "data" / "audio"
     icd10_csv: Path = BASE_DIR / "data" / "icd10_satusehat.csv"
-    icd10_seed_csv: Path = BASE_DIR / "data" / "icd10_seed.csv"
 
     satusehat_mode: str = "mock"  # mock | sandbox
     satusehat_auth_url: str = "https://api-satusehat-stg.dto.kemkes.go.id/oauth2/v1"
