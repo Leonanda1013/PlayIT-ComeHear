@@ -5,7 +5,7 @@ import { AlertTriangle, Check, ChevronDown, MicOff, Pause, Play, Square, X } fro
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble, Waveform } from '@/components/Scribe'
-import { Notice, TextArea } from '@/components/ui/kit'
+import { Dialog, Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
 import { closeAudioSession, finishAudioSession, getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
 import { mmss } from '@/lib/format'
@@ -30,6 +30,8 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [micMenuOpen, setMicMenuOpen] = useState(false)
   const [micButtonHovered, setMicButtonHovered] = useState(false)
+  const [pendingNavigationUrl, setPendingNavigationUrl] = useState<string | null>(null)
+  const [showNavBlockModal, setShowNavBlockModal] = useState(false)
   const micMenuRef = useRef<HTMLDivElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
@@ -135,6 +137,74 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [recording])
+
+  // Pencegahan navigasi internal web aplikasi (klik sidebar menu, tab antrean, dll) saat sedang merekam
+  useEffect(() => {
+    if (!recording) return
+
+    function handleLinkClick(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      const anchor = target?.closest('a')
+      if (!anchor) return
+
+      const href = anchor.getAttribute('href')
+      if (!href || href === '#' || href.startsWith('javascript:')) return
+
+      // Tahan navigasi halaman dan buka modal konfirmasi internal ComeHear
+      event.preventDefault()
+      event.stopPropagation()
+      setPendingNavigationUrl(href)
+      setShowNavBlockModal(true)
+    }
+
+    function handlePopState(event: PopStateEvent) {
+      event.preventDefault()
+      window.history.pushState(null, '', window.location.href)
+      setPendingNavigationUrl('/kunjungan')
+      setShowNavBlockModal(true)
+    }
+
+    window.history.pushState(null, '', window.location.href)
+    window.addEventListener('popstate', handlePopState)
+    document.addEventListener('click', handleLinkClick, true)
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+      document.removeEventListener('click', handleLinkClick, true)
+    }
+  }, [recording])
+
+  function handleCancelLeave() {
+    setShowNavBlockModal(false)
+    setPendingNavigationUrl(null)
+  }
+
+  function handleFinishAndLeave() {
+    setShowNavBlockModal(false)
+    setPendingNavigationUrl(null)
+    // Selesaikan perekaman secara normal: panggil stop() agar potongan audio diproses,
+    // dikirim ke backend /audio-finish, dan diarahkan langsung ke halaman /draf-s
+    if (recorder.current && recorder.current.state !== 'inactive') {
+      recorder.current.stop()
+    }
+  }
+
+  function handleDiscardAndLeave() {
+    setShowNavBlockModal(false)
+    const dest = pendingNavigationUrl || '/kunjungan'
+    setPendingNavigationUrl(null)
+
+    // Bersihkan recorder & audio tracks seketika tanpa diproses
+    if (recorder.current && recorder.current.state !== 'inactive') {
+      recorder.current.ondataavailable = null
+      recorder.current.onstop = null
+      recorder.current.stop()
+    }
+    stream.current?.getTracks().forEach((track) => track.stop())
+    setActiveStream(null)
+    setRecording(false)
+    navigate(dest)
+  }
 
   function decide(decision: 'setuju' | 'tolak', customGiver?: string, customRel?: string) {
     if (recording) return
@@ -286,7 +356,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
           <div>
             <p className="text-[14px] font-bold text-[#92400e]">Sesi Rekaman Sebelumnya Terputus</p>
             <p className="mt-0.5 text-[12px] text-[#78350f]">
-              Ditemukan sesi rekaman (ID #{interruptedSession.id}) yang belum diselesaikan. Anda dapat melanjutkan rekaman, menyelesaikan rekaman yang ada untuk diproses AI, atau menutup sesi ini untuk mulai baru.
+              Terdeteksi sesi rekaman percakapan yang belum selesai diproses. Anda dapat melanjutkan perekaman, menyusun draf SOAP dari audio yang tersimpan, atau menutup sesi ini untuk mulai baru.
             </p>
           </div>
         </div>
@@ -418,6 +488,56 @@ export function SubjectivePage({ data }: { data: Consultation }) {
         </Card>
       </div>
     </>}
+
+    {/* Modal Peringatan Navigasi saat Perekaman Sedang Berjalan */}
+    <Dialog
+      open={showNavBlockModal}
+      onClose={handleCancelLeave}
+      title="Perekaman Sedang Berlangsung"
+      width={520}
+    >
+      <div className="space-y-4 text-[13px] text-[#33475b]">
+        <div className="flex items-start gap-3 rounded-[12px] border border-[#f5c2c7] bg-[#fdf2f2] p-3.5 text-xs text-[#9f1c24]">
+          <AlertTriangle className="size-5 shrink-0 text-[#dc3545] mt-0.5" />
+          <div>
+            <strong className="block text-[13px] font-bold">Perekaman audio percakapan belum selesai!</strong>
+            <p className="mt-1 leading-relaxed">
+              Meninggalkan halaman ini saat merekam akan memutus percakapan dokter-pasien. Pilih tindakan yang ingin Anda lakukan:
+            </p>
+          </div>
+        </div>
+
+        <ul className="space-y-1.5 text-xs text-ch-muted">
+          <li>• <b className="text-ch-ink">Tetap di Sini</b>: Melanjutkan percakapan dan perekaman dokter-pasien.</li>
+          <li>• <b className="text-ch-ink">Selesaikan &amp; Susun Draf</b>: Menghentikan rekaman saat ini dan memproses audio menjadi draf Subjektif AI.</li>
+          <li>• <b className="text-ch-ink">Hentikan &amp; Tinggalkan</b>: Membuang rekaman saat ini dan berpindah ke halaman tujuan.</li>
+        </ul>
+
+        <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-[#e2ecf0] pt-3">
+          <button
+            type="button"
+            onClick={handleCancelLeave}
+            className="inline-flex h-9 items-center rounded-[8px] bg-ch-brand px-4 text-[13px] font-semibold text-white hover:bg-ch-brand-hover shadow-sm"
+          >
+            Tetap di Halaman Ini
+          </button>
+          <button
+            type="button"
+            onClick={handleFinishAndLeave}
+            className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#0b8597] bg-[#e2f6f9] px-3.5 text-[13px] font-semibold text-[#0b8597] hover:bg-[#d0f0f5]"
+          >
+            <Check className="size-3.5" /> Selesaikan &amp; Susun Draf
+          </button>
+          <button
+            type="button"
+            onClick={handleDiscardAndLeave}
+            className="inline-flex h-9 items-center rounded-[8px] border border-[#cfdbe2] bg-[#f0f4f7] px-3.5 text-[13px] font-semibold text-[#4b5f70] hover:bg-[#e4ecf0]"
+          >
+            Hentikan &amp; Tinggalkan
+          </button>
+        </div>
+      </div>
+    </Dialog>
   </div>
 }
 
