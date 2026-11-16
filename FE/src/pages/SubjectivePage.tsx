@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, MicOff, Pause, Play, Square } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, MicOff, Pause, Play, Square, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble, Waveform } from '@/components/Scribe'
 import { Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
-import { getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
+import { closeAudioSession, finishAudioSession, getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
 import { mmss } from '@/lib/format'
 import type { Consultation } from '@/lib/types'
 
@@ -16,6 +16,7 @@ const CHUNK_MS = 5000
 export function SubjectivePage({ data }: { data: Consultation }) {
   const id = data.visit.id
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const [fields, setFields] = useState<Record<string, string>>(data.note.subjective || {})
   const [summary, setSummary] = useState(data.note.subjective_summary || '')
@@ -25,19 +26,121 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const [seconds, setSeconds] = useState(0)
   const [error, setError] = useState('')
   const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [micMenuOpen, setMicMenuOpen] = useState(false)
+  const [micButtonHovered, setMicButtonHovered] = useState(false)
+  const micMenuRef = useRef<HTMLDivElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
   const sessionId = useRef<number | null>(null)
   const seq = useRef(0)
   const uploads = useRef<Promise<unknown>>(Promise.resolve())
-  const { consent, decide: saveDecision, saved } = useConsent(data, setError)
+  const {
+    consent,
+    decide: saveDecision,
+    givenByName,
+    setGivenByName,
+    relation,
+    setRelation,
+    saved,
+  } = useConsent(data, setError)
+
+  // Tutup menu dropdown mikrofon saat klik di luar
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (micMenuRef.current && !micMenuRef.current.contains(event.target as Node)) {
+        setMicMenuOpen(false)
+      }
+    }
+    if (micMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [micMenuOpen])
+
+  // Deteksi perangkat input audio (mikrofon) yang terhubung ke komputer pengguna
+  useEffect(() => {
+    let mounted = true
+
+    async function updateAudioDevices() {
+      if (!navigator.mediaDevices?.enumerateDevices) return
+      try {
+        let deviceList = await navigator.mediaDevices.enumerateDevices()
+        let audioInputs = deviceList.filter((d) => d.kind === 'audioinput')
+
+        // Jika label masih kosong karena belum ada izin audio di browser, buka stream sementara untuk memicu izin
+        const hasLabels = audioInputs.some((d) => Boolean(d.label))
+        if (!hasLabels && navigator.mediaDevices.getUserMedia) {
+          try {
+            const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+            tempStream.getTracks().forEach((track) => track.stop())
+            deviceList = await navigator.mediaDevices.enumerateDevices()
+            audioInputs = deviceList.filter((d) => d.kind === 'audioinput')
+          } catch {
+            // Izin belum diberikan di level peramban
+          }
+        }
+
+        if (!mounted) return
+        setAudioDevices(audioInputs)
+        if (audioInputs.length > 0) {
+          setSelectedDeviceId((prev) => {
+            if (prev && audioInputs.some((d) => d.deviceId === prev)) return prev
+            const defaultDevice = audioInputs.find((d) => d.deviceId === 'default') || audioInputs[0]
+            return defaultDevice?.deviceId || ''
+          })
+        }
+      } catch {
+        // Abaikan error enumerasi
+      }
+    }
+
+    void updateAudioDevices()
+
+    if (navigator.mediaDevices?.addEventListener) {
+      const handleDeviceChange = () => { void updateAudioDevices() }
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange)
+      return () => {
+        mounted = false
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+      }
+    }
+
+    return () => { mounted = false }
+  }, [])
+
+  // Cek apakah ada sesi rekaman sebelumnya yang terputus (status masih 'recording' di server)
+  const interruptedSession = data.session && (data.session.status === 'recording' || (data.session as { status: string }).status === 'interrupted')
+    ? data.session
+    : null
+
+  // Alasan pengalihan draf S sesuai kondisi
+  const redirectReason = (location.state as { redirectReason?: string } | null)?.redirectReason ||
+    new URLSearchParams(location.search).get('alasan')
 
   const live = useQuery({ queryKey: ['scribe', id, 'live'], queryFn: () => getScribe(id), enabled: recording, refetchInterval: recording ? 3000 : false })
 
   useEffect(() => { if (!recording || paused) return; const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000); return () => window.clearInterval(timer) }, [recording, paused])
   useEffect(() => () => { if (recorder.current && recorder.current.state !== 'inactive') { recorder.current.ondataavailable = null; recorder.current.onstop = null; recorder.current.stop() }; stream.current?.getTracks().forEach((track) => track.stop()) }, [])
 
-  function decide(decision: 'setuju' | 'tolak') { if (recording) return; setError(''); saveDecision(decision) }
+  // Peringatan saat pengguna me-refresh atau menutup tab saat perekaman berlangsung
+  useEffect(() => {
+    if (!recording) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = 'Perekaman audio sedang berlangsung. Meninggalkan halaman dapat memutus sesi rekaman.'
+      return event.returnValue
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [recording])
+
+  function decide(decision: 'setuju' | 'tolak', customGiver?: string, customRel?: string) {
+    if (recording) return
+    setError('')
+    saveDecision(decision, customGiver, customRel)
+  }
 
   function sendChunk(blob: Blob) {
     const n = seq.current++
@@ -52,14 +155,32 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     uploads.current.catch((caught) => setError(caught instanceof Error ? caught.message : 'Potongan audio gagal dikirim.'))
   }
 
-  async function startRecording() {
+  async function startRecording(continueExisting = false) {
     setError('')
     if (consent !== 'setuju') { setError('Pilih "Pasien Menyetujui Perekaman" terlebih dahulu sebelum memulai rekaman.'); return }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setError('Browser tidak mendukung perekaman. Gunakan pencatatan manual.'); return }
     try {
       await saved()
-      const media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
-      stream.current = media; setActiveStream(media); seq.current = 0; sessionId.current = null; uploads.current = Promise.resolve()
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
+      }
+      let media: MediaStream
+      try {
+        media = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+      } catch (firstErr) {
+        if (selectedDeviceId) {
+          media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+        } else {
+          throw firstErr
+        }
+      }
+      stream.current = media
+      setActiveStream(media)
+      seq.current = 0
+      sessionId.current = continueExisting && interruptedSession ? interruptedSession.id : null
+      uploads.current = Promise.resolve()
       const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined
       const next = new MediaRecorder(media, type ? { mimeType: type } : undefined); recorder.current = next
       next.ondataavailable = (event) => { if (event.data.size) sendChunk(event.data) }
@@ -78,6 +199,35 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       }
       next.start(CHUNK_MS); setSeconds(0); setPaused(false); setRecording(true)
     } catch (caught) { setError(caught instanceof Error && caught.message ? caught.message : 'Mikrofon tidak tersedia atau izin ditolak. Periksa perangkat lalu coba lagi.') }
+  }
+
+  async function handleFinishInterruptedSession() {
+    if (!interruptedSession) return
+    setBusy(true)
+    setError('')
+    try {
+      await finishAudioSession(id, interruptedSession.id)
+      await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
+      navigate(`/kunjungan/${id}/draf-s`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Gagal menyelesaikan sesi rekaman terputus.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCloseInterruptedSession() {
+    if (!interruptedSession) return
+    setBusy(true)
+    setError('')
+    try {
+      await closeAudioSession(id, interruptedSession.id)
+      await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Gagal menutup sesi rekaman.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function toObjective() {
@@ -103,14 +253,71 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     finally { setBusy(false) }
   }
 
-  const consentBlock = <ConsentBlock consent={consent} onDecide={decide} disabled={recording} />
+  const consentBlock = (
+    <ConsentBlock
+      consent={consent}
+      onDecide={decide}
+      disabled={recording}
+      patientName={data.visit.patient.name}
+      givenByName={givenByName}
+      relation={relation}
+      onUpdateGiver={(name, rel) => {
+        setGivenByName(name)
+        setRelation(rel)
+      }}
+    />
+  )
 
   const transcript = live.data?.transcript || []
   const manual = consent === 'tolak'
+  const currentDeviceLabel = audioDevices.find((d) => d.deviceId === selectedDeviceId)?.label ||
+    (audioDevices.length > 0 ? (audioDevices[0].label || 'Mikrofon Bawaan') : 'Mikrofon Bilik 3')
 
   return <div className="space-y-[27px]">
     <ClinicalHeader consultation={data} stage="subjektif" patientExtra={consentBlock} />
+    {redirectReason && consent !== 'setuju' && <Notice tone="info">{redirectReason}</Notice>}
     {error && <Notice tone="bad">{error}</Notice>}
+
+    {/* Banner Pemulihan Sesi Rekaman Terputus */}
+    {interruptedSession && !recording && (
+      <div role="alert" className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-[#f0c27b] bg-[#fffaf0] p-4 text-[#7c4d0b] shadow-sm">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 size-5 shrink-0 text-[#d97706]" />
+          <div>
+            <p className="text-[14px] font-bold text-[#92400e]">Sesi Rekaman Sebelumnya Terputus</p>
+            <p className="mt-0.5 text-[12px] text-[#78350f]">
+              Ditemukan sesi rekaman (ID #{interruptedSession.id}) yang belum diselesaikan. Anda dapat melanjutkan rekaman, menyelesaikan rekaman yang ada untuk diproses AI, atau menutup sesi ini untuk mulai baru.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => startRecording(true)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[8px] bg-[#d97706] px-3 text-[12px] font-semibold text-white hover:bg-[#b45309] disabled:opacity-50"
+          >
+            <Play className="size-3 fill-current" /> Lanjutkan Rekaman
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleFinishInterruptedSession}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[#d97706] bg-white px-3 text-[12px] font-semibold text-[#b45309] hover:bg-[#fff6e5] disabled:opacity-50"
+          >
+            <Check className="size-3" /> Selesaikan &amp; Susun Draf
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleCloseInterruptedSession}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[#cfdbe2] bg-[#f0f4f7] px-3 text-[12px] font-semibold text-[#4b5f70] hover:bg-[#e4ecf0] disabled:opacity-50"
+          >
+            <X className="size-3" /> Tutup Sesi
+          </button>
+        </div>
+      </div>
+    )}
 
     {manual ? (
       /* Pasien menolak perekaman: Subjektif diisi manual oleh dokter. */
@@ -131,8 +338,66 @@ export function SubjectivePage({ data }: { data: Consultation }) {
         {recording && !paused && <Waveform stream={activeStream} />}
         <div className="ml-auto flex flex-wrap gap-4">
           {!recording ? <>
-            <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-3 text-[14px] font-medium text-[#3d5266]"><ChevronDown className="size-3.5" /> Mikrofon Bilik 3</button>
-            <button type="button" disabled={busy} onClick={startRecording} className="inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand hover:text-ch-teal disabled:opacity-50"><Play className="size-3 fill-current" /> Mulai Rekam</button>
+            <div className="relative" ref={micMenuRef}>
+              <button
+                type="button"
+                onClick={() => setMicMenuOpen((v) => !v)}
+                onMouseEnter={() => setMicButtonHovered(true)}
+                onMouseLeave={() => setMicButtonHovered(false)}
+                title={currentDeviceLabel}
+                className="inline-flex h-9 max-w-[240px] items-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-3 text-[14px] font-medium text-[#3d5266] hover:bg-[#e4ecf0] hover:text-ch-ink"
+              >
+                <ChevronDown className={`size-3.5 shrink-0 transition-transform ${micMenuOpen ? 'rotate-180' : ''}`} />
+                <MarqueeText text={currentDeviceLabel} isHovered={micButtonHovered} />
+              </button>
+
+              {micMenuOpen && (
+                <div className="absolute right-0 top-full z-50 mt-1 min-w-[240px] max-w-[320px] rounded-[10px] border border-[#dce6eb] bg-white py-1.5 shadow-lg">
+                  <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[#8a9bad]">
+                    Pilih Mikrofon Perangkat
+                  </div>
+                  {audioDevices.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-[#5f7284]">Tidak ada mikrofon terdeteksi</div>
+                  ) : (
+                    <div className="max-h-52 overflow-y-auto">
+                      {audioDevices.map((device, index) => {
+                        const isSelected = selectedDeviceId === device.deviceId || (!selectedDeviceId && index === 0)
+                        const label = device.label || `Mikrofon Perangkat ${index + 1}`
+                        return (
+                          <button
+                            key={device.deviceId || index}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDeviceId(device.deviceId)
+                              setMicMenuOpen(false)
+                            }}
+                            className={`flex w-full items-center justify-between px-3 py-2 text-left text-[13px] hover:bg-[#f0f7f9] ${
+                              isSelected ? 'bg-[#eaf6f8] font-semibold text-ch-teal' : 'text-[#3d5266]'
+                            }`}
+                          >
+                            <MarqueeText text={label} className="pr-2" />
+                            {isSelected && <Check className="size-3.5 shrink-0 text-ch-teal" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => startRecording(false)}
+              className={`inline-flex h-9 items-center gap-2 rounded-[8px] px-4 text-[14px] font-semibold shadow-sm transition-all disabled:opacity-50 ${
+                consent === 'setuju'
+                  ? 'bg-ch-brand text-white hover:bg-ch-brand-hover ring-2 ring-ch-brand/20'
+                  : 'border border-[#dce6eb] bg-[#eef4f7] text-[#3d5266] hover:border-ch-brand hover:text-ch-teal'
+              }`}
+            >
+              <Play className="size-3 fill-current" /> Mulai Rekam
+            </button>
           </> : <>
             <button type="button" className="inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266]" onClick={() => { if (paused) recorder.current?.resume(); else recorder.current?.pause(); setPaused(!paused) }}>{paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{paused ? 'Lanjutkan' : 'Jeda'}</button>
             <button type="button" className="inline-flex h-9 items-center gap-2 rounded-[8px] bg-ch-brand px-4 text-[14px] font-semibold text-white hover:bg-ch-brand-hover" onClick={() => recorder.current?.stop()}><Square className="size-3.5 fill-current" /> Selesai Rekam</button>
@@ -168,4 +433,76 @@ function EmptyBox({ title, children }: { title: string; children: React.ReactNod
   return <div className="mt-4 grid flex-1 place-items-center rounded-[12px] border border-dashed border-[#d6e1e7] bg-[#fcfdfe] px-6 py-10 text-center">
     <div><span className="mx-auto grid size-12 place-items-center rounded-full bg-[#eef3f7] text-[#9aacc0]"><MicOff className="size-5" /></span><p className="mt-3 text-[13px] font-semibold text-[#2f4053]">{title}</p><p className="mx-auto mt-2 text-[11px] leading-[18px] text-[#96a7ba]">{children}</p></div>
   </div>
+}
+
+function MarqueeText({
+  text,
+  isHovered: externalHovered,
+  className = '',
+}: {
+  text: string
+  isHovered?: boolean
+  className?: string
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const measureRef = useRef<HTMLSpanElement>(null)
+  const [internalHovered, setInternalHovered] = useState(false)
+  const [overflowDistance, setOverflowDistance] = useState(0)
+
+  const isHovered = externalHovered ?? internalHovered
+
+  const checkOverflow = useCallback(() => {
+    if (containerRef.current && measureRef.current) {
+      const containerW = containerRef.current.clientWidth
+      const textW = measureRef.current.offsetWidth
+      setOverflowDistance(textW > containerW ? textW - containerW : 0)
+    }
+  }, [])
+
+  useEffect(() => {
+    checkOverflow()
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      const ro = new ResizeObserver(() => checkOverflow())
+      ro.observe(containerRef.current)
+      return () => ro.disconnect()
+    }
+  }, [text, checkOverflow])
+
+  const shouldAnimate = Boolean(isHovered && overflowDistance > 0)
+  const duration = Math.max(2.5, Math.min(8, overflowDistance / 28))
+
+  return (
+    <div
+      ref={containerRef}
+      onMouseEnter={() => {
+        checkOverflow()
+        setInternalHovered(true)
+      }}
+      onMouseLeave={() => setInternalHovered(false)}
+      className={`relative flex items-center self-stretch min-w-0 flex-1 overflow-hidden whitespace-nowrap ${className}`}
+    >
+      <span
+        ref={measureRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0 invisible whitespace-nowrap opacity-0"
+      >
+        {text}
+      </span>
+      <span
+        style={
+          shouldAnimate
+            ? ({
+                '--marquee-distance': `-${overflowDistance + 6}px`,
+                '--marquee-duration': `${duration}s`,
+              } as React.CSSProperties)
+            : undefined
+        }
+        className={`block whitespace-nowrap leading-normal transition-transform ${
+          shouldAnimate ? 'animate-marquee-hover' : 'max-w-full truncate'
+        }`}
+      >
+        {text}
+      </span>
+    </div>
+  )
 }

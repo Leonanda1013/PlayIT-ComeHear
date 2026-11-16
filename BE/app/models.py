@@ -5,7 +5,7 @@ satu catatan klinis yang disetujui dokter -> satu atau lebih pengiriman (outbox)
 """
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -44,6 +44,8 @@ class User(Base):
 
 class Patient(Base):
     __tablename__ = "patients"
+    __table_args__ = (Index("uq_patients_nik_nonnull", "nik", unique=True,
+                            postgresql_where=text("nik IS NOT NULL"), sqlite_where=text("nik IS NOT NULL")),)
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     rm_number: Mapped[str | None] = mapped_column(String(20))  # nomor rekam medis fasilitas
@@ -112,12 +114,26 @@ class Consent(Base):
     __tablename__ = "consents"
     id: Mapped[int] = mapped_column(primary_key=True)
     visit_id: Mapped[int] = mapped_column(ForeignKey("visits.id"), unique=True)
+    decision: Mapped[str] = mapped_column(String(10), default="setuju", server_default="setuju")
     given_by_name: Mapped[str] = mapped_column(String(120))
     relation: Mapped[str] = mapped_column(String(40))  # pasien | ibu | ayah | wali
     text_version: Mapped[str] = mapped_column(String(20))
     given_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     recorded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     visit: Mapped[Visit] = relationship(back_populates="consent")
+
+
+class ConsentHistory(Base):
+    """Jejak append-only setiap keputusan persetujuan, termasuk perubahan keputusan."""
+    __tablename__ = "consent_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    visit_id: Mapped[int] = mapped_column(ForeignKey("visits.id"))
+    decision: Mapped[str] = mapped_column(String(10))
+    given_by_name: Mapped[str] = mapped_column(String(120))
+    relation: Mapped[str] = mapped_column(String(40))
+    text_version: Mapped[str] = mapped_column(String(20))
+    recorded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ScribeSession(Base):
@@ -134,6 +150,10 @@ class ScribeSession(Base):
     icd_suggestions: Mapped[list | None] = mapped_column(JSON)
     model_info: Mapped[dict | None] = mapped_column(JSON)
     timings: Mapped[dict | None] = mapped_column(JSON)
+    next_chunk_seq: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     visit: Mapped[Visit] = relationship(back_populates="scribe_sessions")
@@ -182,6 +202,11 @@ class Submission(Base):
     __tablename__ = "satusehat_submissions"
     id: Mapped[int] = mapped_column(primary_key=True)
     visit_id: Mapped[int] = mapped_column(ForeignKey("visits.id"))
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("satusehat_submissions.id"))
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    correction_reason: Mapped[str | None] = mapped_column(Text)
+    corrected_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    snapshot: Mapped[dict | None] = mapped_column(JSON)
     idempotency_key: Mapped[str] = mapped_column(String(80), unique=True)
     bundle: Mapped[dict] = mapped_column(JSON)  # disimpan persis seperti dikirim
     # QUEUED | SENDING | SENT | RETRY_WAIT | NEEDS_ATTENTION | RECONCILING

@@ -35,34 +35,58 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
   const [step, setStep] = useState(0)
   const [query, setQuery] = useState('')
   const [submitted, setSubmitted] = useState('')
+  const [searchPage, setSearchPage] = useState(1)
+  const [showAllSearch, setShowAllSearch] = useState(false)
   const [selected, setSelected] = useState<Patient | null>(null)
   const [np, setNp] = useState<NewPatient>(emptyPatient)
   const [npErrors, setNpErrors] = useState<Partial<Record<keyof NewPatient, string>>>({})
+  const [nikApiError, setNikApiError] = useState<string | null>(null)
   const [visit, setVisit] = useState({ visit_date: todayIso(), location_id: 0, practitioner_id: 0, visit_type: 'Baru', admin_note: '' })
   const [visitErrors, setVisitErrors] = useState<Record<string, string>>({})
   const [success, setSuccess] = useState<string | null>(null)
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
 
-  const registry = useQuery({ queryKey: ['registry'], queryFn: getRegistration })
+  const registry = useQuery({ queryKey: ['registry'], queryFn: () => getRegistration() })
   const locations = useQuery({ queryKey: ['locations'], queryFn: getLocations })
   const doctors = useQuery({ queryKey: ['practitioners'], queryFn: getPractitioners })
   const patients = useMemo(() => registry.data?.patients || [], [registry.data])
 
-  const results = useMemo(() => {
+  const PAGE_SIZE = 6
+
+  const allSearchResults = useMemo(() => {
     const q = norm(submitted)
     if (!q) return []
     const tokens = q.split(/[\s-–]+/).filter((t) => t.length > 1)
     return patients.filter((p) => {
       const hay = norm(`${p.name} ${p.rm_number} ${p.nik || ''} ${dateShort(p.birth_date)} ${p.birth_date || ''}`)
       return tokens.every((t) => hay.includes(t)) || hay.includes(q)
-    }).slice(0, 6)
+    })
   }, [submitted, patients])
 
+  const totalSearchPages = Math.max(1, Math.ceil(allSearchResults.length / PAGE_SIZE))
+  const results = useMemo(() => {
+    if (showAllSearch) return allSearchResults
+    const start = (searchPage - 1) * PAGE_SIZE
+    return allSearchResults.slice(start, start + PAGE_SIZE)
+  }, [allSearchResults, searchPage, showAllSearch])
+
   const duplicate = useMemo(() => np.name.trim() && np.birth_date ? patients.find((p) => norm(p.name) === norm(np.name) && p.birth_date === np.birth_date) : undefined, [np, patients])
+  const duplicateNikPatient = useMemo(() => np.nik.length === 16 ? patients.find((p) => p.nik === np.nik) : null, [np.nik, patients])
 
   const savePatient = useMutation({
     mutationFn: () => createPatient(np),
-    onSuccess: async (data) => { setSelected(data.patient); setNp(emptyPatient); await queryClient.invalidateQueries({ queryKey: ['registry'] }) },
+    onSuccess: async (data) => {
+      setSelected(data.patient)
+      setNp(emptyPatient)
+      setNikApiError(null)
+      await queryClient.invalidateQueries({ queryKey: ['registry'] })
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : 'Gagal menyimpan pasien.'
+      if (/nik|duplikat|terdaftar|conflict/i.test(msg)) {
+        setNikApiError(msg)
+      }
+    },
   })
   const saveVisit = useMutation({
     mutationFn: async () => {
@@ -105,13 +129,35 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <Panel className="min-h-[430px]">
           <h2 className="text-[16px] font-bold">Cari pasien lama</h2>
-          <form className="mt-3" onSubmit={(e) => { e.preventDefault(); setSubmitted(query) }}>
+          <form className="mt-3" onSubmit={(e) => { e.preventDefault(); setSubmitted(query); setSearchPage(1); setShowAllSearch(false) }}>
             <Label htmlFor="cari" required>Nomor RM, NIK, atau nama dan tanggal lahir</Label>
             <label className="relative block"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#6b7f93]" /><input id="cari" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Contoh: Ayu Lestari – 12 Mei 1992" className={`${inputClass} pl-9`} /></label>
             <button type="submit" className={`${btn.primary} mt-3 h-9 text-[13px]`}>Cari Pasien</button>
           </form>
           {registry.isError && <div className="mt-3"><Notice tone="bad">{registry.error.message}</Notice></div>}
           {submitted && <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-xs text-ch-muted">
+              <span>Ditemukan <b>{allSearchResults.length}</b> pasien untuk pencarian "{submitted}"</span>
+              {allSearchResults.length > PAGE_SIZE && !showAllSearch && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSearch(true)}
+                  className="text-[11px] font-semibold text-ch-brand hover:underline"
+                >
+                  Lihat Semua ({allSearchResults.length})
+                </button>
+              )}
+              {showAllSearch && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSearch(false)}
+                  className="text-[11px] font-semibold text-ch-brand hover:underline"
+                >
+                  Tampilkan per Halaman
+                </button>
+              )}
+            </div>
+
             {results.length === 0 ? <p className="rounded-[10px] bg-[#f1f6f8] p-3 text-xs text-ch-muted">Pasien tidak ditemukan. Daftarkan sebagai pasien baru di panel kanan.</p> : results.map((p) => {
               const active = selected?.id === p.id
               return <div key={p.id} className={`flex items-center gap-3 rounded-[12px] border bg-white px-3 py-2.5 ${active ? 'border-ch-brand ring-1 ring-ch-brand' : 'border-[#d6e3e9]'}`}>
@@ -123,6 +169,36 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
                 </div>
               </div>
             })}
+
+            {/* Kontrol Paginasi untuk melihat lebih dari 6 hasil */}
+            {allSearchResults.length > PAGE_SIZE && !showAllSearch && (
+              <div className="mt-3 flex items-center justify-between border-t border-[#dce6eb] pt-3 text-xs">
+                <span className="text-ch-muted">
+                  Menampilkan {(searchPage - 1) * PAGE_SIZE + 1}–{Math.min(searchPage * PAGE_SIZE, allSearchResults.length)} dari {allSearchResults.length}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={searchPage <= 1}
+                    onClick={() => setSearchPage((p) => Math.max(1, p - 1))}
+                    className="inline-flex h-7 items-center rounded-[6px] border border-[#d2e1e7] bg-white px-2.5 text-[11px] font-semibold text-[#374e61] hover:bg-[#f0f4f7] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Sebelumnya
+                  </button>
+                  <span className="px-1 text-[11px] font-semibold text-[#374e61]">
+                    {searchPage} / {totalSearchPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={searchPage >= totalSearchPages}
+                    onClick={() => setSearchPage((p) => Math.min(totalSearchPages, p + 1))}
+                    className="inline-flex h-7 items-center rounded-[6px] border border-[#d2e1e7] bg-white px-2.5 text-[11px] font-semibold text-[#374e61] hover:bg-[#f0f4f7] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Berikutnya
+                  </button>
+                </div>
+              </div>
+            )}
           </div>}
           {duplicate && <div role="alert" className="mt-3 flex gap-3 rounded-[12px] border border-[#f3c58b] bg-[#fff6ec] p-3"><span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#f2a23a] text-xs font-bold text-white">!</span><div><p className="text-[12px] font-bold text-[#b45309]">Periksa kandidat sebelum membuat data baru.</p><p className="text-[11px] text-[#9a3412]">{duplicate.name} (RM-{duplicate.rm_number}) memiliki nama dan tanggal lahir yang sama. <button type="button" className="font-semibold underline" onClick={() => setSelected(duplicate)}>Pilih pasien ini</button></p></div></div>}
         </Panel>
@@ -131,14 +207,48 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
           <h2 className="text-[16px] font-bold">Daftarkan pasien baru</h2>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div><Label htmlFor="nama" required>Nama lengkap</Label><input id="nama" className={inputClass} value={np.name} onChange={(e) => set('name', e.target.value)} placeholder="Masukkan nama lengkap" />{err(npErrors.name)}</div>
-            <div><Label htmlFor="nik" required>NIK</Label><input id="nik" inputMode="numeric" maxLength={16} className={inputClass} value={np.nik} onChange={(e) => set('nik', e.target.value.replace(/\D/g, ''))} placeholder="Masukkan 16 digit" />{err(npErrors.nik) || <p className="mt-1 text-[10px] text-ch-faint">{np.nik.length}/16 digit</p>}</div>
+            <div>
+              <Label htmlFor="nik" required>NIK</Label>
+              <input
+                id="nik"
+                inputMode="numeric"
+                maxLength={16}
+                className={`${inputClass} ${(nikApiError || duplicateNikPatient) ? 'border-ch-bad ring-1 ring-ch-bad' : ''}`}
+                value={np.nik}
+                onChange={(e) => {
+                  set('nik', e.target.value.replace(/\D/g, ''))
+                  setNikApiError(null)
+                }}
+                placeholder="Masukkan 16 digit"
+              />
+              {nikApiError ? (
+                <p className="mt-1 flex items-start gap-1 text-[11px] font-semibold text-ch-bad">
+                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{nikApiError}</span>
+                </p>
+              ) : duplicateNikPatient ? (
+                <p className="mt-1 flex items-start gap-1 text-[11px] font-semibold text-ch-warn">
+                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>NIK sudah terdaftar: {duplicateNikPatient.name} (RM-{duplicateNikPatient.rm_number})</span>
+                </p>
+              ) : err(npErrors.nik) || (
+                <p className="mt-1 text-[10px] text-ch-faint">{np.nik.length}/16 digit</p>
+              )}
+            </div>
             <div><Label htmlFor="lahir" required>Tanggal lahir</Label><input id="lahir" type="date" max={todayIso()} className={inputClass} value={np.birth_date} onChange={(e) => set('birth_date', e.target.value)} />{err(npErrors.birth_date)}</div>
             <div><Label htmlFor="jk" required>Jenis kelamin</Label><SelectInput id="jk" value={np.gender} onChange={(e) => set('gender', e.target.value)}><option value="">Pilih jenis kelamin</option><option value="male">Laki-laki</option><option value="female">Perempuan</option></SelectInput>{err(npErrors.gender)}</div>
             <div className="sm:col-span-2"><Label htmlFor="telp">Nomor telepon</Label><input id="telp" inputMode="tel" className={inputClass} value={np.phone} onChange={(e) => set('phone', e.target.value.replace(/[^\d+]/g, ''))} placeholder="08xxxxxxxxxx" /></div>
             <div className="sm:col-span-2"><Label htmlFor="alamat" required>Alamat</Label><input id="alamat" className={inputClass} value={np.address} onChange={(e) => set('address', e.target.value)} placeholder="Masukkan alamat lengkap" />{err(npErrors.address)}</div>
           </div>
           <p className="mt-3 text-[11px] text-ch-muted">Nomor RM akan dibuat otomatis setelah pasien tersimpan.</p>
-          {savePatient.isError && <div className="mt-2"><Notice tone="bad">{savePatient.error.message}</Notice></div>}
+          {savePatient.isError && (
+            <div className="mt-2">
+              <Notice tone="bad">
+                <AlertCircle className="mr-1 inline size-4" />
+                {savePatient.error.message}
+              </Notice>
+            </div>
+          )}
           {savePatient.isSuccess && <div className="mt-2"><Notice>{savePatient.data.message} Pasien otomatis dipilih.</Notice></div>}
           <button type="button" onClick={submitPatient} disabled={savePatient.isPending} className={`${btn.primary} mt-3 w-full`}>{savePatient.isPending ? 'Menyimpan…' : 'Simpan Pasien Baru'}</button>
         </Panel>

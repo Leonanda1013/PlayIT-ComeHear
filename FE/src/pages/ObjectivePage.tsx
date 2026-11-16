@@ -191,7 +191,18 @@ export function ObjectivePage({ data }: { data: Consultation }) {
     </Panel>
 
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <button type="button" className={btn.outline} onClick={() => navigate(`/kunjungan/${id}/draf-s`)}>Kembali</button>
+      <button
+        type="button"
+        className={btn.outline}
+        onClick={() => {
+          const backPath = data.visit.status === 'manual' || (!data.session && !data.note.subjective_summary)
+            ? `/kunjungan/${id}/subjektif`
+            : `/kunjungan/${id}/draf-s`
+          navigate(backPath)
+        }}
+      >
+        Kembali
+      </button>
       <div className="flex gap-3"><button type="button" className={btn.outline} disabled={busy} onClick={() => save(false)}>Simpan Draf</button><button type="button" disabled={busy} onClick={() => save(true)} className={btn.primary}>Lanjut ke Asesmen &amp; Plan <ArrowRight className="size-4" /></button></div>
     </div>
   </div>

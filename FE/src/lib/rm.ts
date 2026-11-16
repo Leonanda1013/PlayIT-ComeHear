@@ -12,8 +12,12 @@ export const confirmArrival = (id: number) =>
 export const getHistory = (q = '') =>
   apiRequest<{ count: number; visits: HistoryVisit[] }>(`/api/backend/riwayat?${new URLSearchParams({ q })}`)
 
-export const getRegistration = () =>
-  apiRequest<{ patients: Patient[]; queued_patient_ids: number[] }>('/api/backend/pendaftaran')
+export const getRegistration = (params?: { q?: string; page?: number; limit?: number }) => {
+  const query = params && Object.keys(params).length
+    ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString()
+    : ''
+  return apiRequest<{ patients: Patient[]; queued_patient_ids: number[]; total?: number }>(`/api/backend/pendaftaran${query}`)
+}
 
 export const getPractitioners = () => apiRequest<{ id: number; name: string }[]>('/api/practitioners')
 export const getLocations = () => apiRequest<LocationRef[]>('/api/lokasi')
@@ -45,4 +49,4 @@ export const requeueSubmission = (id: number) =>
   apiRequest<{ message: string }>(`/api/backend/submissions/${id}/requeue`, { method: 'POST' })
 
 export const getNotifications = () =>
-  apiRequest<NotificationsResponse>('/api/backend/notifikasi')
+  apiRequest<NotificationsResponse>('/api/notifikasi')

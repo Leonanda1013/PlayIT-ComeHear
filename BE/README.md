@@ -40,6 +40,36 @@ transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI
 Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python scripts/upgrade_demo.py`
 (menambah kolom baru tanpa menghapus data, lalu mengisi antrean demo).
 
+### Supabase PostgreSQL
+
+1. Dari folder `BE`, isi `DATABASE_URL` di `.env` dengan URI PostgreSQL Supabase dari **Database → Connect**. Variabel ini wajib; server tidak memakai SQLite sebagai fallback. `.env` diabaikan Git. Isi juga `SECRET_KEY` dan `DEMO_PASSWORD`.
+2. Untuk database yang sudah berisi data, jalankan `.venv/Scripts/python scripts/test_db_connection.py --inspect-only` lebih dulu. Perintah ini hanya membaca koneksi serta menunjukkan tabel dan kolom yang belum ada.
+3. Jika migrasi diperlukan, buat backup lalu jalankan `.venv/Scripts/python scripts/test_db_connection.py`. Perintah ini membuat tabel, menambah kolom, dan melakukan seed pada database baru. Startup server juga melakukan inisialisasi yang sama.
+
+NIK pasien dilindungi oleh validasi API dan indeks unik database. Pemeriksaan `--inspect-only` juga
+menampilkan jumlah NIK ganda dan keberadaan indeks tersebut sebelum migrasi dijalankan.
+
+### Pembagian akses backend
+
+| Area | Dokter | Admin/perawat rekam medis |
+|---|---:|---:|
+| Antrean dokter, panggil pasien, SOAP, scribe/audio, ICD/KFA, persetujuan | Ya | Tidak |
+| Pendaftaran, koreksi identitas pasien, konfirmasi kedatangan | Tidak | Ya |
+| Pantau/koreksi/kirim ulang SATUSEHAT dan dasbor operasional | Tidak | Ya |
+| Resume dan riwayat kunjungan | Ya | Ya |
+
+Koreksi identitas SATUSEHAT memakai `POST /submissions/{id}/correct-identity`. Endpoint ini membangun
+bundle revisi baru dan menyimpan hubungan ke submission lama. `POST /submissions/{id}/requeue` hanya
+memakai bundle lama untuk gangguan sementara. Sesi rekaman yang terputus dapat diperiksa melalui
+`GET /visits/{id}/recording-recovery`, lalu dilanjutkan atau ditutup dengan endpoint `resume`/`abandon`.
+Endpoint persetujuan mewajibkan `decision` (`setuju`/`tolak`), `given_by_name`, dan `relation`; setiap
+perubahan disimpan pada `consent_history` bersama versi teks dan petugas pencatat.
+
+Untuk sandbox, set `ENABLE_DEMO_SEED=false`, gunakan `SECRET_KEY` acak minimal 32 karakter, isi kredensial
+SATUSEHAT, batasi `CORS_ORIGINS`, dan aktifkan `SECURE_COOKIES` saat API dilayani melalui HTTPS.
+
+Versi Scribe/ICD-10 saat ini memerlukan `data/icd10_satusehat.csv` dengan kolom `CODE,DISPLAY,VERSION`. File ini dibaca dari disk, bukan dari tabel PostgreSQL; tanpa file tersebut, pencarian ICD-10 dan pipeline Scribe gagal.
+
 | Variabel `.env` | Untuk |
 |---|---|
 | `LLM_PROVIDERS` | `gemini,anthropic` (dicoba berurutan). `mock` hanya untuk uji alur, bukan hasil klinis. |
@@ -47,8 +77,8 @@ Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python 
 | `SATUSEHAT_MODE` | `mock` (tanpa internet) atau `sandbox` (isi `SATUSEHAT_CLIENT_ID/SECRET`; cocokkan URL dengan environment Postman). |
 | `ASR_MODEL` | `small`/`medium`/`large-v3-turbo`, atau path folder CT2 hasil `notebooks/train_asr_v2.ipynb`. |
 
-Tabel ICD-10 lengkap: taruh `icd10_satusehat.csv` (kolom `CODE,DISPLAY,VERSION`, dari eksplorasi Nisa) di
-`data/`. Tanpa file itu dipakai `data/icd10_seed.csv` (±40 kode umum poli anak).
+Katalog ICD-10 lengkap: taruh `icd10_satusehat.csv` (kolom `CODE,DISPLAY,VERSION`, dari eksplorasi Nisa) di
+`data/`.
 
 ## Uji
 

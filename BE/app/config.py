@@ -11,8 +11,13 @@ class Settings(BaseSettings):
 
     secret_key: str = "dev-only-secret"
     demo_password: str = "demo"
-    database_url: str = f"sqlite:///{BASE_DIR / 'comehear.db'}"
+    # Wajib diisi lewat BE/.env atau environment proses; jangan diam-diam memakai SQLite.
+    database_url: str
     timezone: str = "Asia/Jakarta"
+    session_ttl_minutes: int = 480
+    secure_cookies: bool = False
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    enable_demo_seed: bool = False
     audio_dir: Path = BASE_DIR / "data" / "audio"
     icd10_csv: Path = BASE_DIR / "data" / "icd10_satusehat.csv"
 
@@ -47,6 +52,27 @@ class Settings(BaseSettings):
     @property
     def provider_list(self) -> list[str]:
         return [p.strip() for p in self.llm_providers.split(",") if p.strip()]
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [origin.strip().rstrip("/") for origin in self.cors_origins.split(",") if origin.strip()]
+
+    def validate_runtime(self) -> None:
+        if self.satusehat_mode not in ("mock", "sandbox"):
+            raise RuntimeError("SATUSEHAT_MODE harus mock atau sandbox.")
+        if self.session_ttl_minutes <= 0:
+            raise RuntimeError("SESSION_TTL_MINUTES harus lebih dari nol.")
+        if self.satusehat_mode == "sandbox":
+            if self.secret_key == "dev-only-secret" or len(self.secret_key) < 32:
+                raise RuntimeError("SECRET_KEY sandbox harus berupa nilai acak minimal 32 karakter.")
+            if self.demo_password == "demo" or len(self.demo_password) < 10:
+                raise RuntimeError("DEMO_PASSWORD sandbox harus diganti dengan nilai minimal 10 karakter.")
+            if not self.satusehat_client_id or not self.satusehat_client_secret:
+                raise RuntimeError("Kredensial SATUSEHAT sandbox belum lengkap.")
+            if self.enable_demo_seed:
+                raise RuntimeError("ENABLE_DEMO_SEED harus false pada mode sandbox.")
+            if any(origin == "*" for origin in self.allowed_origins):
+                raise RuntimeError("CORS_ORIGINS sandbox tidak boleh memakai wildcard.")
 
 
 @lru_cache

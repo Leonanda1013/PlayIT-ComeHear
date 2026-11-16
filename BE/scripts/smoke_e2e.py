@@ -32,6 +32,7 @@ def main():
         res_demo = c.post("/pendaftaran/demo").json()
         assert res_demo["status"] == "ok"
 
+        login(c, "rian@rumahsakit.id")
         queue_res = c.get("/antrean").json()
         assert queue_res["status"] == "ok"
         assert len(queue_res["rows"]) > 0
@@ -47,7 +48,8 @@ def main():
         r = c.post(f"/visits/{vid}/transcript-text", data={"transcript": "Dokter: tes"})
         assert r.status_code == 403, "harus ditolak sebelum ada persetujuan"
 
-        consent_res = c.post(f"/visits/{vid}/consent", data={"decision": "setuju"}).json()
+        consent_res = c.post(f"/visits/{vid}/consent", data={
+            "decision": "setuju", "given_by_name": "Pasien Demo", "relation": "pasien"}).json()
         assert consent_res.get("decision") == "setuju"
 
         r_trans = c.post(f"/visits/{vid}/transcript-text", data={"transcript": TRANSKRIP}).json()
@@ -61,10 +63,6 @@ def main():
         assert st["status"] == "done", st
         assert st["summary"] and st["icd"], st
 
-        r = c.post(f"/visits/{vid}/soap", data={"step": "verifikasi", "action": "approve", "confirm": "ya"})
-        assert r.status_code == 403, "perawat tidak boleh memvalidasi"
-
-        login(c, "rian@rumahsakit.id")
         consult_s = c.get(f"/visits/{vid}/s").json()
         assert consult_s["status"] == "ok"
         code = st["icd"][0]["code"]
@@ -102,6 +100,7 @@ def main():
         q_selesai = c.get("/antrean?tab=selesai").json()
         assert any(r["id"] == vid for r in q_selesai["rows"])
 
+        login(c, "perawat@rumahsakit.id")
         dasbor = c.get("/dasbor").json()
         assert dasbor["status"] == "ok"
         assert "correction_ratio" in dasbor

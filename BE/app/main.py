@@ -10,13 +10,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import Integer, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine, get_db
 from app.fhir.codes import DRUGS
-from app.migrate import add_missing_columns
-from app.models import (AuditLog, ClinicalNote, Consent, Location, Patient, Practitioner, ReviewEdit,
+from app.migrate import add_missing_columns, ensure_patient_nik_unique
+from app.models import (AuditLog, ClinicalNote, Consent, ConsentHistory, Location, Patient, Practitioner, ReviewEdit,
                         ScribeSession, Submission, User, Visit, as_utc, utcnow)
 from app.satusehat.client import get_client
 from app.scribe import pipeline
@@ -24,7 +25,7 @@ from app.scribe.icd import icd_table
 from app.scribe.schemas import SUBJECTIVE_FIELDS
 from app.security import verify_password
 from app.seed import next_queue_no, next_rm_number, next_visit_code, seed, seed_today_queue
-from app.services.notes import ApprovalError, approve_and_queue, requeue
+from app.services.notes import ApprovalError, approve_and_queue, correct_identity_and_queue, requeue
 from app.services.soap_form import KESADARAN, apply_form
 from app.sync.worker import OutboxWorker
 
@@ -34,6 +35,14 @@ settings = get_settings()
 APP_DIR = Path(__file__).parent
 WIB = timezone(timedelta(hours=7))
 CONSENT_VERSION = "v1-2026-10"
+CONSENT_RELATIONS = {"pasien", "ibu", "ayah", "wali", "pasangan", "anak", "keluarga", "lainnya"}
+ROLE_MATRIX = {
+    "clinical": ("dokter",),
+    "queue_call": ("dokter",),
+    "registration": ("admin", "perawat"),
+    "satusehat": ("admin", "perawat"),
+    "shared_records": ("dokter", "admin", "perawat"),
+}
 HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 worker: OutboxWorker | None = None
@@ -42,13 +51,19 @@ worker: OutboxWorker | None = None
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global worker
+    settings.validate_runtime()
     Base.metadata.create_all(engine)
     added = add_missing_columns(engine)
     if added:
         log.info("kolom baru ditambahkan: %s", ", ".join(added))
+    duplicates = ensure_patient_nik_unique(engine)
+    if duplicates:
+        masked = [f"****{nik[-4:]} ({count} data)" for nik, count in duplicates]
+        log.error("NIK ganda ditemukan; indeks unik belum dipasang: %s", ", ".join(masked))
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
-    with SessionLocal() as db:
-        seed(db, settings.demo_password)
+    if settings.enable_demo_seed:
+        with SessionLocal() as db:
+            seed(db, settings.demo_password)
     worker = OutboxWorker(SessionLocal, get_client(settings), settings)
     worker.start()
     pipeline.warm_up(settings)
@@ -65,7 +80,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://.*",
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -137,9 +152,11 @@ def serialize_visit_brief(v: Visit, state: str, draft: tuple[str, str]) -> dict:
 
 
 # ---------------- Autentikasi (Cookie + Bearer Token HMAC) ----------------
-def _sign(uid: int) -> str:
-    sig = hmac.new(settings.secret_key.encode(), str(uid).encode(), hashlib.sha256).hexdigest()
-    return f"{uid}.{sig}"
+def _sign(uid: int, issued_at: int | None = None) -> str:
+    issued_at = issued_at or int(utcnow().timestamp())
+    payload = f"{uid}.{issued_at}"
+    sig = hmac.new(settings.secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
 
 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
@@ -152,11 +169,15 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not token:
         token = request.cookies.get("session", "")
 
-    uid = token.partition(".")[0]
-    if uid.isdigit() and hmac.compare_digest(_sign(int(uid)), token):
-        user = db.get(User, int(uid))
-        if user:
-            return user
+    parts = token.split(".")
+    if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+        uid, issued_at = int(parts[0]), int(parts[1])
+        max_age = settings.session_ttl_minutes * 60
+        now = int(utcnow().timestamp())
+        if 0 <= now - issued_at <= max_age and hmac.compare_digest(_sign(uid, issued_at), token):
+            user = db.get(User, uid)
+            if user:
+                return user
     raise HTTPException(status_code=401, detail="Sesi tidak valid atau belum login.")
 
 
@@ -234,7 +255,8 @@ async def login(request: Request, db: Session = Depends(get_db)):
             "practitioner_id": user.practitioner_id
         }
     })
-    resp.set_cookie("session", token, httponly=True, samesite="lax")
+    resp.set_cookie("session", token, httponly=True, samesite="lax",
+                    secure=settings.secure_cookies, max_age=settings.session_ttl_minutes * 60)
     return resp
 
 
@@ -261,7 +283,8 @@ def get_me(user: User = Depends(current_user)):
 # ---------------- Lokasi ----------------
 @app.get("/lokasi")
 @app.get("/api/lokasi")
-def list_locations(db: Session = Depends(get_db)):
+def list_locations(user: User = Depends(require(*ROLE_MATRIX["shared_records"])),
+                   db: Session = Depends(get_db)):
     locations = db.scalars(select(Location).order_by(Location.id)).all()
     return [
         {
@@ -276,7 +299,8 @@ def list_locations(db: Session = Depends(get_db)):
 
 
 @app.post("/lokasi")
-async def set_location(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def set_location(request: Request, user: User = Depends(require(*ROLE_MATRIX["shared_records"])),
+                       db: Session = Depends(get_db)):
     ct = request.headers.get("content-type", "")
     if "application/json" in ct:
         data = await request.json()
@@ -325,7 +349,8 @@ def draft_label(v: Visit, state: str) -> tuple[str, str]:
 
 
 @app.get("/antrean")
-def queue_api(request: Request, tab: str = "semua", q: str = "", user: User = Depends(current_user),
+def queue_api(request: Request, tab: str = "semua", q: str = "",
+              user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
               db: Session = Depends(get_db)):
     loc = current_location(request, db)
     # Pasien, lokasi, catatan, dan sesi scribe diambil sekaligus (bukan 1 query per baris):
@@ -375,7 +400,8 @@ def queue_api(request: Request, tab: str = "semua", q: str = "", user: User = De
 
 
 @app.post("/visits/{visit_id}/panggil")
-def call_patient(visit_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def call_patient(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
+                 db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     # Kembalikan pasien lain di bilik/lokasi yang belum selesai diperiksa ke status "menunggu"
     other_active = db.scalars(
@@ -416,7 +442,8 @@ def _ensure_note(db: Session, v: Visit) -> ClinicalNote:
 
 
 def _review_session(v: Visit) -> ScribeSession | None:
-    return next((s for s in reversed(v.scribe_sessions) if s.status not in ("failed", "replaced")), None)
+    return next((s for s in reversed(v.scribe_sessions)
+                 if s.status not in ("failed", "replaced", "abandoned")), None)
 
 
 def _failed_session(v: Visit) -> ScribeSession | None:
@@ -448,11 +475,21 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "patient": serialize_patient(v.patient),
             "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location)},
             "consent": {
+                "decision": v.consent.decision,
                 "given_by_name": v.consent.given_by_name,
                 "relation": v.consent.relation,
                 "version": v.consent.text_version,
                 "given_at": v.consent.given_at.isoformat() if v.consent.given_at else None
-            } if v.consent else None
+            } if v.consent else None,
+            "consent_history": [{
+                "decision": item.decision,
+                "given_by_name": item.given_by_name,
+                "relation": item.relation,
+                "version": item.text_version,
+                "recorded_by": item.recorded_by,
+                "changed_at": item.changed_at.isoformat() if item.changed_at else None,
+            } for item in db.scalars(select(ConsentHistory).where(
+                ConsentHistory.visit_id == v.id).order_by(ConsentHistory.id)).all()]
         },
         "note": {
             "id": note.id,
@@ -496,7 +533,8 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
 @app.get("/visits/{visit_id}/s")
 @app.get("/visits/{visit_id}/oap")
 @app.get("/visits/{visit_id}/verifikasi")
-def get_consultation(visit_id: int, request: Request, user: User = Depends(current_user),
+def get_consultation(visit_id: int, request: Request,
+                     user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                      db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     note = _ensure_note(db, v)
@@ -513,7 +551,8 @@ def get_consultation(visit_id: int, request: Request, user: User = Depends(curre
 
 
 @app.post("/visits/{visit_id}/soap")
-async def save_soap(visit_id: int, request: Request, user: User = Depends(current_user),
+async def save_soap(visit_id: int, request: Request,
+                    user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                     db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     note = _ensure_note(db, v)
@@ -530,6 +569,7 @@ async def save_soap(visit_id: int, request: Request, user: User = Depends(curren
     if action == "approve" and user.role != "dokter":
         raise HTTPException(403, "Hanya dokter yang dapat memvalidasi catatan klinis.")
     
+    v.started_at = v.started_at or utcnow()
     errors = apply_form(note, v, form, {r.code: r for r in icd_table(settings)})
     if v.status in ("registered", "consented", "manual", "processing"):
         v.status = "draft"
@@ -578,30 +618,51 @@ async def save_soap(visit_id: int, request: Request, user: User = Depends(curren
 
 
 @app.post("/visits/{visit_id}/consent")
-def set_consent(visit_id: int, decision: str = Form(...), user: User = Depends(current_user),
+def set_consent(visit_id: int, decision: str = Form(...), given_by_name: str = Form(...),
+                relation: str = Form(...),
+                user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                 db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
+    if v.note and v.note.approved_snapshot:
+        raise HTTPException(409, "Persetujuan tidak dapat diubah setelah catatan divalidasi.")
+    decision = decision.strip().lower()
+    if decision not in ("setuju", "tolak"):
+        raise HTTPException(422, "Keputusan persetujuan hanya boleh 'setuju' atau 'tolak'.")
+    giver = (given_by_name or "").strip()
+    relationship = (relation or "").strip().lower()
+    if not giver:
+        raise HTTPException(422, "Nama pemberi persetujuan wajib diisi.")
+    if relationship not in CONSENT_RELATIONS:
+        raise HTTPException(422, "Hubungan pemberi persetujuan tidak valid.")
+    if decision == "tolak" and any(s.status == "recording" for s in v.scribe_sessions):
+        raise HTTPException(409, "Hentikan atau tutup rekaman lebih dulu.")
+    if v.consent is None:
+        v.consent = Consent(visit_id=v.id, decision=decision, given_by_name=giver,
+                            relation=relationship, text_version=CONSENT_VERSION, recorded_by=user.id)
+    else:
+        v.consent.decision = decision
+        v.consent.given_by_name = giver
+        v.consent.relation = relationship
+        v.consent.text_version = CONSENT_VERSION
+        v.consent.given_at = utcnow()
+        v.consent.recorded_by = user.id
+    db.add(ConsentHistory(visit_id=v.id, decision=decision, given_by_name=giver,
+                          relation=relationship, text_version=CONSENT_VERSION, recorded_by=user.id))
     if decision == "setuju":
-        if v.consent is None:
-            db.add(Consent(visit_id=v.id, given_by_name=v.patient.name, relation="pasien",
-                           text_version=CONSENT_VERSION, recorded_by=user.id))
         if v.status in ("registered", "manual"):
             v.status = "consented"
-        audit(db, user, "consent", f"visit:{v.id}", "setuju direkam")
+        summary = f"setuju; pemberi={giver}; hubungan={relationship}; versi={CONSENT_VERSION}"
     else:
-        if any(s.status == "recording" for s in v.scribe_sessions):
-            raise HTTPException(409, "Hentikan rekaman lebih dulu.")
-        if v.consent is not None:
-            db.delete(v.consent)
-        if v.status in ("registered", "consented"):
-            v.status = "manual"
-        audit(db, user, "consent", f"visit:{v.id}", "menolak direkam (manual)")
+        v.status = "manual"
+        summary = f"tolak; pemberi={giver}; hubungan={relationship}; versi={CONSENT_VERSION}"
+    audit(db, user, "consent", f"visit:{v.id}", summary)
     db.commit()
-    return {"decision": decision, "status": "ok"}
+    return {"decision": decision, "given_by_name": giver, "relation": relationship,
+            "version": CONSENT_VERSION, "status": "ok"}
 
 
 def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, status: str = "queued") -> ScribeSession:
-    if v.consent is None:
+    if v.consent is None or v.consent.decision != "setuju":
         raise HTTPException(403, "Belum ada persetujuan pasien: perekaman tidak diizinkan.")
     if v.note and v.note.approved_snapshot:
         raise HTTPException(409, "Catatan sudah divalidasi.")
@@ -613,7 +674,7 @@ def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, st
     if status != "recording":
         v.ended_at = now
     v.status = "processing"
-    ss = ScribeSession(visit_id=v.id, audio_path=audio_path, status=status,
+    ss = ScribeSession(visit_id=v.id, audio_path=audio_path, status=status, last_activity_at=now,
                        model_info={"live": {"offset": 0.0, "asr_s": 0.0}} if status == "recording" else None)
     db.add(ss)
     audit(db, user, "scribe_start", f"visit:{v.id}", "rekam langsung" if status == "recording" else
@@ -623,10 +684,11 @@ def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, st
 
 
 @app.post("/visits/{visit_id}/audio")
-async def upload_audio(visit_id: int, audio: UploadFile = File(...), user: User = Depends(current_user),
+async def upload_audio(visit_id: int, audio: UploadFile = File(...),
+                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                        db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
-    if v.consent is None:
+    if v.consent is None or v.consent.decision != "setuju":
         raise HTTPException(403, "Belum ada persetujuan pasien.")
     suffix = Path(audio.filename or "rekaman.webm").suffix or ".webm"
     path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}{suffix}"
@@ -636,12 +698,10 @@ async def upload_audio(visit_id: int, audio: UploadFile = File(...), user: User 
     return {"session_id": ss.id, "status": "ok"}
 
 
-_chunk_seq: dict[int, int] = {}
-
-
 @app.post("/visits/{visit_id}/audio-chunk")
 async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = File(...),
-                      session_id: int | None = Form(None), user: User = Depends(current_user),
+                      session_id: int | None = Form(None),
+                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     if seq == 0:
@@ -652,35 +712,95 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
         ss = db.get(ScribeSession, session_id) if session_id else None
         if ss is None or ss.visit_id != v.id or ss.status != "recording":
             raise HTTPException(409, "Sesi rekaman tidak aktif.")
-    expected = _chunk_seq.get(ss.id, 0)
+    expected = ss.next_chunk_seq or 0
     if seq == expected - 1:
         return {"session_id": ss.id, "status": "ok"}
     if seq != expected:
         raise HTTPException(409, f"Potongan {seq} tidak berurutan (diharapkan {expected}).")
     with open(ss.audio_path, "ab") as f:
         f.write(await chunk.read())
-    _chunk_seq[ss.id] = seq + 1
+    ss.next_chunk_seq = seq + 1
+    ss.last_activity_at = utcnow()
+    db.commit()
     pipeline.submit_live(SessionLocal, ss.id, settings)
-    return {"session_id": ss.id, "status": "ok"}
+    return {"session_id": ss.id, "next_seq": ss.next_chunk_seq, "status": "ok"}
 
 
 @app.post("/visits/{visit_id}/audio-finish")
-def audio_finish(visit_id: int, session_id: int = Form(...), user: User = Depends(current_user),
+def audio_finish(visit_id: int, session_id: int = Form(...),
+                 user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                  db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     ss = db.get(ScribeSession, session_id)
     if ss is None or ss.visit_id != v.id or ss.status != "recording":
         raise HTTPException(409, "Sesi rekaman tidak aktif.")
     ss.status = "queued"
+    ss.closed_at = ss.last_activity_at = utcnow()
+    ss.closed_by = user.id
     v.ended_at = utcnow()
     db.commit()
     pipeline.submit(SessionLocal, ss.id, settings)
     return {"session_id": ss.id, "status": "ok"}
 
 
+def _recoverable_recording(db: Session, visit_id: int, session_id: int | None = None) -> ScribeSession:
+    stmt = select(ScribeSession).where(ScribeSession.visit_id == visit_id,
+                                         ScribeSession.status == "recording")
+    if session_id is not None:
+        stmt = stmt.where(ScribeSession.id == session_id)
+    ss = db.scalar(stmt.order_by(ScribeSession.id.desc()))
+    if not ss:
+        raise HTTPException(404, "Tidak ada sesi rekaman terputus yang dapat dipulihkan.")
+    return ss
+
+
+@app.get("/visits/{visit_id}/recording-recovery")
+def recording_recovery(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                       db: Session = Depends(get_db)):
+    get_visit(db, visit_id)
+    try:
+        ss = _recoverable_recording(db, visit_id)
+    except HTTPException:
+        return {"status": "ok", "recoverable": False, "session": None}
+    size = Path(ss.audio_path).stat().st_size if ss.audio_path and Path(ss.audio_path).exists() else 0
+    return {"status": "ok", "recoverable": True, "session": {
+        "id": ss.id, "next_seq": ss.next_chunk_seq or 0, "last_activity_at":
+        ss.last_activity_at.isoformat() if ss.last_activity_at else None, "audio_bytes": size}}
+
+
+@app.post("/visits/{visit_id}/recording-recovery/{session_id}/resume")
+def resume_recording(visit_id: int, session_id: int,
+                     user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                     db: Session = Depends(get_db)):
+    ss = _recoverable_recording(db, visit_id, session_id)
+    if not ss.audio_path or not Path(ss.audio_path).exists():
+        raise HTTPException(409, "Berkas rekaman sesi tidak tersedia.")
+    ss.last_activity_at = utcnow()
+    audit(db, user, "resume_recording", f"visit:{visit_id}", f"session:{ss.id}")
+    db.commit()
+    return {"status": "ok", "session_id": ss.id, "next_seq": ss.next_chunk_seq or 0}
+
+
+@app.post("/visits/{visit_id}/recording-recovery/{session_id}/abandon")
+def abandon_recording(visit_id: int, session_id: int,
+                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                      db: Session = Depends(get_db)):
+    v = get_visit(db, visit_id)
+    ss = _recoverable_recording(db, visit_id, session_id)
+    if ss.audio_path:
+        Path(ss.audio_path).unlink(missing_ok=True)
+        ss.audio_deleted_at = utcnow()
+    ss.status, ss.closed_at, ss.closed_by = "abandoned", utcnow(), user.id
+    v.status = "consented" if v.consent and v.consent.decision == "setuju" else "manual"
+    audit(db, user, "abandon_recording", f"visit:{visit_id}", f"session:{ss.id}")
+    db.commit()
+    return {"status": "ok", "session_id": ss.id, "message": "Sesi rekaman ditutup dan audio parsial dihapus."}
+
+
 @app.post("/visits/{visit_id}/transcript-text")
 async def upload_text(visit_id: int, request: Request, transcript: str = Form(None),
-                      user: User = Depends(current_user), db: Session = Depends(get_db)):
+                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                      db: Session = Depends(get_db)):
     v = get_visit(db, visit_id)
     text = transcript
     if not text:
@@ -700,7 +820,8 @@ async def upload_text(visit_id: int, request: Request, transcript: str = Form(No
 
 
 @app.get("/visits/{visit_id}/audio/{session_id}")
-def play_audio(visit_id: int, session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def play_audio(visit_id: int, session_id: int,
+               user: User = Depends(require(*ROLE_MATRIX["clinical"])), db: Session = Depends(get_db)):
     ss = db.get(ScribeSession, session_id)
     if not ss or ss.visit_id != visit_id or not ss.audio_path or ss.audio_deleted_at or not Path(ss.audio_path).exists():
         raise HTTPException(404, "Rekaman tidak tersedia (sudah dihapus setelah validasi).")
@@ -710,7 +831,8 @@ def play_audio(visit_id: int, session_id: int, user: User = Depends(current_user
 
 
 @app.get("/api/sessions/{session_id}")
-def session_status(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def session_status(session_id: int, user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                   db: Session = Depends(get_db)):
     ss = db.get(ScribeSession, session_id)
     if not ss:
         raise HTTPException(404)
@@ -718,7 +840,8 @@ def session_status(session_id: int, user: User = Depends(current_user), db: Sess
 
 
 @app.get("/visits/{visit_id}/scribe")
-def scribe_state(visit_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def scribe_state(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                 db: Session = Depends(get_db)):
     """Keadaan draf AI untuk asisten klinis (dipanggil berkala selama rekaman/penyusunan)."""
     db.expire_all()
     v = get_visit(db, visit_id)
@@ -736,7 +859,7 @@ def scribe_state(visit_id: int, user: User = Depends(current_user), db: Session 
 
 
 @app.get("/api/icd")
-def icd_search(q: str = "", user: User = Depends(current_user)):
+def icd_search(q: str = "", user: User = Depends(require(*ROLE_MATRIX["clinical"]))):
     ql = q.strip().lower()
     if len(ql) < 2:
         return []
@@ -748,7 +871,7 @@ def icd_search(q: str = "", user: User = Depends(current_user)):
 
 @app.get("/api/kfa")
 @app.get("/api/backend/kfa")
-def kfa_search(q: str = "", user: User = Depends(current_user)):
+def kfa_search(q: str = "", user: User = Depends(require(*ROLE_MATRIX["clinical"]))):
     """Mencari obat KFA terdaftar untuk peresepan terstruktur SATUSEHAT."""
     ql = q.strip().lower()
     hits = []
@@ -906,7 +1029,8 @@ def _delete_audio(db: Session, v: Visit):
 # ---------------- Resume & Riwayat ----------------
 @app.get("/visits/{visit_id}/resume")
 @app.get("/visits/{visit_id}/status")
-def resume_page(visit_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def resume_page(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["shared_records"])),
+                db: Session = Depends(get_db)):
     db.expire_all()
     v = get_visit(db, visit_id)
     sub = v.latest_submission
@@ -938,6 +1062,9 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
         },
         "submission": {
             "id": sub.id,
+            "revision": sub.revision or 1,
+            "supersedes_id": sub.supersedes_id,
+            "correction_reason": sub.correction_reason,
             "status": sub.status,
             "attempts": sub.attempts,
             "last_error_text": sub.last_error_text,
@@ -949,11 +1076,15 @@ def resume_page(visit_id: int, user: User = Depends(current_user), db: Session =
 
 
 @app.post("/submissions/{sub_id}/requeue")
-def requeue_submission(sub_id: int, user: User = Depends(require("admin", "dokter")), db: Session = Depends(get_db)):
+def requeue_submission(sub_id: int, user: User = Depends(require(*ROLE_MATRIX["satusehat"])),
+                       db: Session = Depends(get_db)):
     sub = db.get(Submission, sub_id)
     if not sub or sub.status not in ("NEEDS_ATTENTION", "RETRY_WAIT"):
         raise HTTPException(409, "Pengiriman ini tidak bisa diulang.")
-    requeue(db, sub, user)
+    try:
+        requeue(db, sub, user)
+    except ApprovalError as exc:
+        raise HTTPException(409, " ".join(exc.errors)) from exc
     if worker:
         worker.nudge()
     return {
@@ -963,8 +1094,31 @@ def requeue_submission(sub_id: int, user: User = Depends(require("admin", "dokte
     }
 
 
+@app.post("/submissions/{sub_id}/correct-identity")
+async def correct_submission_identity(sub_id: int, request: Request,
+                                      user: User = Depends(require(*ROLE_MATRIX["satusehat"])),
+                                      db: Session = Depends(get_db)):
+    sub = db.get(Submission, sub_id)
+    if not sub:
+        raise HTTPException(404, "Pengiriman tidak ditemukan.")
+    body = await _body(request)
+    reason = str(body.get("reason") or "Perbaikan identitas pasien").strip()
+    if not reason:
+        raise HTTPException(422, "Alasan koreksi wajib diisi.")
+    try:
+        corrected = correct_identity_and_queue(db, sub, user, settings, reason)
+    except ApprovalError as exc:
+        raise HTTPException(409, " ".join(exc.errors)) from exc
+    if worker:
+        worker.nudge()
+    return {"status": "ok", "message": "Bundle koreksi dibuat dan dimasukkan ke antrean kirim.",
+            "submission_id": corrected.id, "revision": corrected.revision,
+            "supersedes_id": corrected.supersedes_id}
+
+
 @app.get("/riwayat")
-def history_page(q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+def history_page(q: str = "", user: User = Depends(require(*ROLE_MATRIX["shared_records"])),
+                 db: Session = Depends(get_db)):
     stmt = select(Visit).join(Patient).order_by(Visit.arrived_at.desc()).limit(200)
     if q.strip():
         like = f"%{q.strip()}%"
@@ -1026,13 +1180,14 @@ def serialize_rm_visit(v: Visit) -> dict:
 
 
 @app.get("/api/practitioners")
-def list_practitioners(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_practitioners(user: User = Depends(require(*ROLE_MATRIX["registration"])),
+                       db: Session = Depends(get_db)):
     return [{"id": p.id, "name": p.name} for p in db.scalars(select(Practitioner).order_by(Practitioner.name))]
 
 
 @app.get("/api/rm/kunjungan")
 def rm_visits(scope: str = "hari_ini", q: str = "", status: str = "", tanggal: str = "",
-              user: User = Depends(current_user), db: Session = Depends(get_db)):
+              user: User = Depends(require(*ROLE_MATRIX["registration"])), db: Session = Depends(get_db)):
     start = today_start_utc()
     if tanggal:
         try:
@@ -1075,13 +1230,17 @@ def confirm_arrival(visit_id: int, user: User = Depends(require("admin", "perawa
 
 
 @app.get("/api/satusehat/pengiriman")
-def satusehat_submissions(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def satusehat_submissions(user: User = Depends(require(*ROLE_MATRIX["satusehat"])),
+                          db: Session = Depends(get_db)):
     subs = db.scalars(select(Submission).order_by(Submission.id.desc()).limit(200)).all()
     return {
         "status": "ok",
         "mode": settings.satusehat_mode,
         "rows": [{
             "id": s.id,
+            "revision": s.revision or 1,
+            "supersedes_id": s.supersedes_id,
+            "correction_reason": s.correction_reason,
             "status": s.status,
             "attempts": s.attempts,
             "last_error_code": s.last_error_code,
@@ -1099,7 +1258,8 @@ def satusehat_submissions(user: User = Depends(current_user), db: Session = Depe
 
 # ---------------- Administrasi Pendaftaran ----------------
 @app.get("/pendaftaran")
-def registration_page(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def registration_page(user: User = Depends(require(*ROLE_MATRIX["registration"])),
+                      db: Session = Depends(get_db)):
     queued = set(db.scalars(select(Visit.patient_id).where(Visit.arrived_at >= today_start_utc())))
     patients = db.scalars(select(Patient).order_by(Patient.name)).all()
     return {
@@ -1118,8 +1278,17 @@ async def _body(request: Request) -> dict:
     return dict(await request.form())
 
 
+def _reject_duplicate_nik(db: Session, nik: str, exclude_patient_id: int | None = None) -> None:
+    stmt = select(Patient).where(Patient.nik == nik)
+    if exclude_patient_id is not None:
+        stmt = stmt.where(Patient.id != exclude_patient_id)
+    duplicate = db.scalar(stmt)
+    if duplicate:
+        raise HTTPException(409, f"NIK sudah terdaftar pada pasien RM {duplicate.rm_number}.")
+
+
 @app.post("/pendaftaran/pasien")
-async def add_patient(request: Request, user: User = Depends(require("admin", "perawat", "dokter")),
+async def add_patient(request: Request, user: User = Depends(require(*ROLE_MATRIX["registration"])),
                       db: Session = Depends(get_db)):
     body = await _body(request)
     name, birth_date, gender = body.get("name"), body.get("birth_date"), body.get("gender")
@@ -1128,13 +1297,19 @@ async def add_patient(request: Request, user: User = Depends(require("admin", "p
         raise HTTPException(400, "Nama, tanggal lahir, dan jenis kelamin wajib diisi.")
     if nik.strip() and not (nik.strip().isdigit() and len(nik.strip()) == 16):
         raise HTTPException(400, "NIK harus 16 digit angka.")
+    if nik.strip():
+        _reject_duplicate_nik(db, nik.strip())
 
     p = Patient(name=str(name).strip(), rm_number=next_rm_number(db), nik=nik.strip() or None, gender=gender,
                 birth_date=datetime.strptime(birth_date, "%Y-%m-%d").date(), ihs_number=ihs_number.strip() or None,
                 phone=str(body.get("phone") or "").strip() or None,
                 address=str(body.get("address") or "").strip() or None)
     db.add(p)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "NIK sudah terdaftar pada pasien lain.") from exc
     msg = f"Pasien {p.name} ditambahkan (RM {p.rm_number})."
     if p.nik and not p.ihs_number and settings.satusehat_mode != "mock":
         try:
@@ -1155,7 +1330,7 @@ async def add_patient(request: Request, user: User = Depends(require("admin", "p
 @app.put("/pendaftaran/pasien/{patient_id}")
 @app.post("/pendaftaran/pasien/{patient_id}")
 async def update_patient(patient_id: int, request: Request,
-                         user: User = Depends(require("admin", "perawat", "dokter")),
+                         user: User = Depends(require(*ROLE_MATRIX["registration"])),
                          db: Session = Depends(get_db)):
     p = db.get(Patient, patient_id)
     if not p:
@@ -1191,6 +1366,7 @@ async def update_patient(patient_id: int, request: Request,
         if not (nik.isdigit() and len(nik) == 16):
             raise HTTPException(400, "NIK harus 16 digit angka.")
         if nik != (p.nik or ""):
+            _reject_duplicate_nik(db, nik, p.id)
             p.nik = nik
             p.ihs_number = None
 
@@ -1210,7 +1386,11 @@ async def update_patient(patient_id: int, request: Request,
             pass
 
     audit(db, user, "update_patient", f"patient:{p.id}")
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "NIK sudah terdaftar pada pasien lain.") from exc
     return {
         "status": "ok",
         "message": msg,
@@ -1219,7 +1399,8 @@ async def update_patient(patient_id: int, request: Request,
 
 
 @app.post("/pendaftaran/kunjungan")
-async def register_visit(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def register_visit(request: Request, user: User = Depends(require(*ROLE_MATRIX["registration"])),
+                         db: Session = Depends(get_db)):
     body = await _body(request)
     pid = body.get("patient_id")
     if pid in (None, ""):
@@ -1264,7 +1445,10 @@ async def register_visit(request: Request, user: User = Depends(current_user), d
 
 
 @app.post("/pendaftaran/demo")
-def fill_demo_queue(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def fill_demo_queue(user: User = Depends(require(*ROLE_MATRIX["registration"])),
+                    db: Session = Depends(get_db)):
+    if settings.satusehat_mode != "mock" or not settings.enable_demo_seed:
+        raise HTTPException(403, "Pengisian data demo hanya aktif pada mode mock lokal.")
     n = seed_today_queue(db)
     return {
         "status": "ok",
@@ -1275,7 +1459,7 @@ def fill_demo_queue(user: User = Depends(current_user), db: Session = Depends(ge
 
 # ---------------- Dasbor & Statistik ----------------
 @app.get("/dasbor")
-def dashboard(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def dashboard(user: User = Depends(require(*ROLE_MATRIX["satusehat"])), db: Session = Depends(get_db)):
     by_status = dict(db.execute(select(Submission.status, func.count()).group_by(Submission.status)).all())
     total_edits = db.scalar(select(func.count(ReviewEdit.id))) or 0
     changed = db.scalar(select(func.count(ReviewEdit.id)).where(ReviewEdit.changed)) or 0

@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from app.models import Submission, utcnow
-from app.satusehat.client import MockSatusehat
+from app.satusehat.client import MockSatusehat, SendResult
 from app.services.notes import approve_and_queue
 from app.sync.worker import run_once
 
@@ -80,3 +80,20 @@ def test_gives_up_after_max_attempts(session_factory, db, visit_with_note, docto
         run_once(session_factory, client, settings)
     with session_factory() as s:
         assert s.get(Submission, sid).status == "NEEDS_ATTENTION"
+
+
+def test_invalid_resource_20013_is_not_treated_as_duplicate(session_factory, db, visit_with_note, doctor, settings):
+    sid = _queue(db, visit_with_note, doctor, settings)
+
+    class InvalidEncounter:
+        def post_bundle(self, _bundle):
+            return SendResult(400, {"issue": [{"code": "invalid", "details": {
+                "coding": [{"code": "20013"}],
+                "text": "Invalid resource Encounter due to Future Date [Encounter.period.start]",
+            }}]})
+
+    run_once(session_factory, InvalidEncounter(), settings)
+    with session_factory() as s:
+        sub = s.get(Submission, sid)
+        assert sub.status == "NEEDS_ATTENTION"
+        assert "Future Date" in sub.last_error_text
