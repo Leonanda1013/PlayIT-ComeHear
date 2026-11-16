@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useRef, useState } from 'react'
-import { Check as CheckIcon, ChevronDown, X } from 'lucide-react'
+import { AlertCircle, Check as CheckIcon, CheckCircle2, ChevronDown, Info, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /* Komponen dasar ComeHear: mengikuti DESIGN.md (panel terang, border tipis, teal untuk aksi utama). */
@@ -238,9 +238,43 @@ export const btn = {
   danger: 'inline-flex h-10 items-center justify-center gap-2 rounded-[10px] bg-[#bf2e36] px-4 text-sm font-semibold text-white hover:bg-[#a5242c] disabled:opacity-50',
 }
 
-export function Notice({ tone = 'ok', children }: { tone?: 'ok' | 'bad' | 'info'; children: React.ReactNode }) {
-  const style = tone === 'ok' ? 'border-[#a8dfc8] bg-[#eaf8f2] text-[#176e4e]' : tone === 'bad' ? 'border-[#f2b8b8] bg-[#fff0f0] text-[#9d2525]' : 'border-[#a3dfea] bg-[#e6f6f8] text-ch-teal'
-  return <p role={tone === 'bad' ? 'alert' : 'status'} className={cn('rounded-[12px] border px-4 py-3 text-sm', style)}>{children}</p>
+export function Notice({ tone = 'ok', children, className }: { tone?: 'ok' | 'bad' | 'info'; children: React.ReactNode; className?: string }) {
+  const config = tone === 'ok'
+    ? {
+        border: 'border-[#b1dfbb]',
+        bg: 'bg-[#f0faf4]',
+        text: 'text-[#145a32]',
+        icon: <CheckCircle2 className="size-4 shrink-0 text-[#198754]" />,
+      }
+    : tone === 'bad'
+    ? {
+        border: 'border-[#f5c2c7]',
+        bg: 'bg-[#fdf2f2]',
+        text: 'text-[#9f1c24]',
+        icon: <AlertCircle className="size-4 shrink-0 text-[#dc3545]" />,
+      }
+    : {
+        border: 'border-[#a3dfea]',
+        bg: 'bg-[#edf9fb]',
+        text: 'text-[#0b6e7d]',
+        icon: <Info className="size-4 shrink-0 text-ch-brand" />,
+      }
+
+  return (
+    <div
+      role={tone === 'bad' ? 'alert' : 'status'}
+      className={cn(
+        'flex items-center gap-2.5 rounded-[12px] border px-4 py-3 text-[13px] font-medium shadow-xs leading-relaxed',
+        config.border,
+        config.bg,
+        config.text,
+        className
+      )}
+    >
+      {config.icon}
+      <div className="flex-1">{children}</div>
+    </div>
+  )
 }
 
 export function Dialog({ open, onClose, title, children, width = 500 }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; width?: number }) {

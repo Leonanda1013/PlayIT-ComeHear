@@ -13,7 +13,7 @@ import { Badge, Panel } from '@/components/ui/kit'
 import { getConsultation, getResume, getScribe, visitPath } from '@/lib/clinical'
 import { dateShort, formatExportFileName, mmss, printResumeDocument, submissionMeta, timeWib } from '@/lib/format'
 import { getHistory } from '@/lib/rm'
-import type { HistoryVisit, Patient } from '@/lib/types'
+import type { Consultation, HistoryVisit, Patient } from '@/lib/types'
 
 type Filters = { range: string; poli: string; status: string }
 const RANGES = [['', 'Semua tanggal'], ['today', 'Hari ini'], ['7', '7 hari terakhir'], ['30', '30 hari terakhir']] as const
@@ -329,40 +329,53 @@ export function HistoryDetailPage({ user, onLogout, base }: SessionProps & { bas
   const navigate = useNavigate()
   const [filters, setFilters] = useState<Filters>({ range: '', poli: '', status: '' })
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null)
-  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: id > 0 })
-  const patient = consultation.data?.visit.patient
+  const isDoc = user.role === 'dokter'
+  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), enabled: id > 0 && isDoc, retry: false })
+  const resume = useQuery({ queryKey: ['resume', id], queryFn: () => getResume(id), enabled: id > 0 })
+
+  const visit = consultation.data?.visit || resume.data?.visit
+  const patient = visit?.patient
 
   useEffect(() => {
-    if (consultation.data) {
-      const v = consultation.data.visit
-      const p = v.patient
+    if (visit && patient) {
       document.title = formatExportFileName({
-        rmNumber: p.rm_number,
-        visitDate: v.arrived_at || v.called_at || v.started_at,
-        visitCode: v.code,
+        rmNumber: patient.rm_number,
+        visitDate: visit.arrived_at || (visit as { called_at?: string }).called_at || (visit as { started_at?: string }).started_at,
+        visitCode: visit.code,
         docType: 'ResumeMedis',
       })
       return () => {
         document.title = 'ComeHear'
       }
     }
-  }, [consultation.data])
+  }, [visit, patient])
 
-  return <AppShell user={user} onLogout={onLogout} title={consultation.data ? `${consultation.data.visit.location.poli || 'Poli'} / ${consultation.data.visit.location.name}` : undefined}>
+  const location = visit?.location
+  const isPending = isDoc ? consultation.isPending && resume.isPending : resume.isPending
+  const isError = isDoc ? consultation.isError && resume.isError : resume.isError
+  const activeError = isDoc ? (consultation.error || resume.error) : resume.error
+
+  return <AppShell user={user} onLogout={onLogout} title={location ? `${location.poli || 'Poli'} / ${location.name}` : undefined}>
     <div className="print:hidden">
       <PageTitle title="Riwayat Pasien" back={base} />
       {patient && <SearchFilters search={`${patient.name} / ${patient.rm_number}`} setSearch={() => navigate(base)} filters={filters} setFilters={setFilters} polis={[]} onReset={() => navigate(base)} onClear={() => navigate(base)} />}
     </div>
     <div className="mt-4 space-y-4 print:mt-0 print:space-y-0">
-      {consultation.isPending ? <LoadingState label="Memuat rekam medis…" /> : consultation.isError ? <ErrorState message={consultation.error.message} onRetry={() => consultation.refetch()} /> : <>
-        <div className="print:hidden">
-          <PatientIdentity
-            patient={consultation.data.visit.patient}
-            onEdit={user.role !== 'dokter' ? (p) => setEditingPatient(p) : undefined}
-          />
-        </div>
-        <RecordSummary id={id} />
-      </>}
+      {isPending ? (
+        <LoadingState label="Memuat rekam medis…" />
+      ) : isError ? (
+        <ErrorState message={activeError?.message || 'Rekam medis tidak dapat dimuat.'} onRetry={() => { void consultation.refetch(); void resume.refetch() }} />
+      ) : patient ? (
+        <>
+          <div className="print:hidden">
+            <PatientIdentity
+              patient={patient}
+              onEdit={user.role !== 'dokter' ? (p) => setEditingPatient(p) : undefined}
+            />
+          </div>
+          <RecordSummary id={id} />
+        </>
+      ) : null}
     </div>
     <EditPatientDialog
       patient={editingPatient}
@@ -375,21 +388,29 @@ export function HistoryDetailPage({ user, onLogout, base }: SessionProps & { bas
 /** Panel "Ringkasan Rekam Medis" dengan tab SOAP dan Transkrip & Rekaman Audio. Dipakai di Riwayat dan Resume. */
 export function RecordSummary({ id }: { id: number }) {
   const [tab, setTab] = useState<'soap' | 'audio'>('soap')
-  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id) })
-  const scribe = useQuery({ queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!consultation.data?.session })
+  const consultation = useQuery({ queryKey: ['consultation', id], queryFn: () => getConsultation(id), retry: false })
+  const scribe = useQuery({ queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!consultation.data?.session, retry: false })
   const resume = useQuery({ queryKey: ['resume', id], queryFn: () => getResume(id) })
-  const data = consultation.data
-  if (!data) return null
+
+  const visit = consultation.data?.visit || resume.data?.visit
+  const note = consultation.data?.note || resume.data?.note
+
+  if (!visit || !note) {
+    if (consultation.isPending || resume.isPending) return <LoadingState label="Memuat ringkasan rekam medis…" />
+    return null
+  }
+
   const duration = scribe.data?.duration_s || 0
   const sub = resume.data?.submission
-  const meta = submissionMeta(sub?.status, data.locked)
-  const snapshot = data.note.approved_snapshot as { approved_at?: string } | null
+  const isApproved = Boolean(note.approved_snapshot || (consultation.data && consultation.data.locked))
+  const meta = submissionMeta(sub?.status, isApproved)
+  const snapshot = note.approved_snapshot as { approved_at?: string } | null
 
   const handlePrint = () => {
     printResumeDocument({
-      rmNumber: data.visit.patient.rm_number,
-      visitDate: data.visit.arrived_at || data.visit.called_at || data.visit.started_at,
-      visitCode: data.visit.code,
+      rmNumber: visit.patient.rm_number,
+      visitDate: visit.arrived_at || (visit as { called_at?: string }).called_at || (visit as { started_at?: string }).started_at,
+      visitCode: visit.code,
       docType: 'ResumeMedis',
     })
   }
@@ -397,26 +418,26 @@ export function RecordSummary({ id }: { id: number }) {
   return <>
     <Panel className="print:hidden">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-[20px] font-bold">Ringkasan Rekam Medis</h2><p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-ch-muted">{data.visit.code} · {snapshot?.approved_at ? `Divalidasi ${dateShort(snapshot.approved_at)} ${timeWib(snapshot.approved_at)}` : 'Belum divalidasi dokter'} <Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></p></div>
+        <div><h2 className="text-[20px] font-bold">Ringkasan Rekam Medis</h2><p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-ch-muted">{visit.code} · {snapshot?.approved_at ? `Divalidasi ${dateShort(snapshot.approved_at)} ${timeWib(snapshot.approved_at)}` : 'Belum divalidasi dokter'} <Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></p></div>
         <button type="button" onClick={handlePrint} className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[#d2e1e7] bg-white px-3 text-[13px] font-semibold hover:border-ch-brand print:hidden"><Printer className="size-4 text-ch-teal" /> Cetak Resume</button>
       </div>
       <div role="tablist" className="mt-4 flex gap-6 border-b border-[#dde8ec] px-2 print:hidden">
         {[['soap', 'Ringkasan SOAP'], ['audio', `Transkrip & Rekaman Audio${duration ? ` (${mmss(duration)})` : ''}`]].map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key as 'soap' | 'audio')} className={`-mb-px border-b-2 pb-2 text-xs font-semibold ${tab === key ? 'border-ch-brand text-ch-teal' : 'border-transparent text-ch-muted hover:text-ch-ink'}`}>{label}</button>)}
       </div>
       <div className="mt-5">
-        {tab === 'soap' ? <SoapSummary note={data.note} variant="compact" aiDraft={!!data.session} /> : <div className="space-y-4">
-          <AudioPlayer src={data.session?.has_audio ? visitPath(id, `/audio/${data.session.id}`) : null} duration={duration} />
+        {tab === 'soap' ? <SoapSummary note={note} variant="compact" aiDraft={!!consultation.data?.session} /> : <div className="space-y-4">
+          <AudioPlayer src={consultation.data?.session?.has_audio ? visitPath(id, `/audio/${consultation.data.session.id}`) : null} duration={duration} />
           <div>
-            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-bold">Transkrip Percakapan</h3><p className="text-[11px] text-ch-muted">Transkrip sesi · Pasien: {data.visit.patient.name}</p></div>
-            {(scribe.data?.transcript || data.session?.transcript || []).length ? <div className="mt-3 divide-y divide-[#edf2f5]">
-              {(scribe.data?.transcript || data.session?.transcript || []).map((seg, i) => <div key={i} className="grid grid-cols-[70px_1fr] gap-3 py-2.5 text-[13px]"><b className={seg.speaker === 'doctor' ? 'text-ch-teal' : 'text-ch-ink'}>{seg.speaker === 'doctor' ? 'Dokter' : seg.speaker === 'guardian' ? 'Pendamping' : 'Pasien'}</b><p className="leading-5">{seg.text}</p></div>)}
+            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-bold">Transkrip Percakapan</h3><p className="text-[11px] text-ch-muted">Transkrip sesi · Pasien: {visit.patient.name}</p></div>
+            {(scribe.data?.transcript || consultation.data?.session?.transcript || []).length ? <div className="mt-3 divide-y divide-[#edf2f5]">
+              {(scribe.data?.transcript || consultation.data?.session?.transcript || []).map((seg, i) => <div key={i} className="grid grid-cols-[70px_1fr] gap-3 py-2.5 text-[13px]"><b className={seg.speaker === 'doctor' ? 'text-ch-teal' : 'text-ch-ink'}>{seg.speaker === 'doctor' ? 'Dokter' : seg.speaker === 'guardian' ? 'Pendamping' : 'Pasien'}</b><p className="leading-5">{seg.text}</p></div>)}
             </div> : <p className="mt-3 rounded-[10px] bg-[#f1f6f8] p-3 text-xs text-ch-muted">Kunjungan ini dicatat manual atau tidak memiliki transkrip.</p>}
           </div>
         </div>}
       </div>
     </Panel>
     <div className="hidden print:block">
-      <OfficialResumePrint consultation={data} resume={resume.data} />
+      <OfficialResumePrint consultation={consultation.data || ({ status: 'ok', locked: isApproved, visit, note } as unknown as Consultation)} resume={resume.data} />
     </div>
   </>
 }
