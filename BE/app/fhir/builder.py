@@ -40,8 +40,6 @@ def build_bundle(snap: dict, org_id: str, new_uuid: Callable[[], str] | None = N
     started = datetime.fromisoformat(v["started_at"] or v["arrived_at"])
     ended = datetime.fromisoformat(v["ended_at"] or snap["approved_at"])
     finished = max(datetime.fromisoformat(snap["approved_at"]), ended)
-    if finished == ended:
-        finished = ended + timedelta(minutes=1)
 
     enc_url = _urn(new_uuid)
     enc_ref = {"reference": enc_url}

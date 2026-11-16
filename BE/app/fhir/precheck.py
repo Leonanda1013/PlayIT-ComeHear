@@ -5,6 +5,7 @@ Sandbox SATUSEHAT longgar pada nilai tetapi ketat pada format rujukan (10119, 10
 supaya tidak menghabiskan percobaan kirim.
 """
 import re
+from datetime import datetime, timezone
 
 from app.fhir.codes import DRUGS
 
@@ -15,6 +16,26 @@ ICD_RE = re.compile(r"^[A-Z]\d{2}(\.\d{1,2})?$")
 
 def check_snapshot(snap: dict, org_id: str) -> list[str]:
     errors = []
+    now = datetime.now(timezone.utc)
+    times = {}
+    for key in ("arrived_at", "started_at", "ended_at"):
+        raw = snap["visit"].get(key)
+        if not raw:
+            if key == "arrived_at":
+                errors.append("Waktu kedatangan/pemeriksaan aktual belum tercatat.")
+            continue
+        try:
+            dt = datetime.fromisoformat(raw)
+            dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+            times[key] = dt
+            if dt > now:
+                errors.append(f"Waktu {key} masih di masa depan; periksa tanggal kunjungan.")
+        except ValueError:
+            errors.append(f"Format waktu {key} tidak valid.")
+    if times.get("arrived_at") and times.get("started_at") and times["arrived_at"] > times["started_at"]:
+        errors.append("Waktu kedatangan lebih akhir daripada mulai pemeriksaan.")
+    if times.get("started_at") and times.get("ended_at") and times["started_at"] > times["ended_at"]:
+        errors.append("Waktu mulai pemeriksaan lebih akhir daripada selesai.")
     if not IHS_RE.match(snap["patient"].get("ihs_number") or ""):
         errors.append("Pasien belum punya nomor IHS SATUSEHAT (cari lewat NIK dulu).")
     if not (snap["practitioner"].get("satusehat_id") or "").strip():

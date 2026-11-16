@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, AudioLines, Check, LoaderCircle, Mic, Pause, Play } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
@@ -30,7 +30,10 @@ const S_LABELS: [string, string, boolean][] = [
 export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const id = data.visit.id
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
+  const redirectReason = (location.state as { redirectReason?: string } | null)?.redirectReason ||
+    new URLSearchParams(location.search).get('alasan')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [fields, setFields] = useState<Record<string, string>>(data.note.subjective || {})
@@ -40,7 +43,15 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const [backup, setBackup] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const { consent, decide, saved } = useConsent(data, setError)
+  const {
+    consent,
+    decide,
+    givenByName,
+    setGivenByName,
+    relation,
+    setRelation,
+    saved,
+  } = useConsent(data, setError)
   const scribe = useQuery({
     queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!data.session,
     refetchInterval: (query) => PROCESSING.includes(query.state.data?.status || data.session?.status || '') ? 1500 : false,
@@ -55,10 +66,14 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const processing = PROCESSING.includes(status)
   const failed = status === 'failed' || (!data.session && !!data.failed_session)
 
-  function onDecide(decision: 'setuju' | 'tolak') {
-    decide(decision)
+  function onDecide(decision: 'setuju' | 'tolak', customGiver?: string, customRel?: string) {
+    decide(decision, customGiver, customRel)
     // Menolak perekaman = pencatatan manual di halaman S.
-    if (decision === 'tolak') void saved().then(() => navigate(`/kunjungan/${id}/subjektif`))
+    if (decision === 'tolak') {
+      void saved().then(() => navigate(`/kunjungan/${id}/subjektif`, {
+        state: { redirectReason: 'Persetujuan diubah menjadi manual (tolak perekaman). Anda dialihkan ke halaman Subjektif manual.' }
+      }))
+    }
   }
 
   function edit(key: string, value: string) {
@@ -97,7 +112,24 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const pillLabel = processing ? statusLabel[status] : failed ? 'Pemrosesan Gagal' : 'Rekaman Tersimpan'
 
   return <div className="space-y-[25px]">
-    <ClinicalHeader consultation={data} stage="draf-s" patientExtra={<ConsentBlock consent={consent} onDecide={onDecide} />} />
+    <ClinicalHeader
+      consultation={data}
+      stage="draf-s"
+      patientExtra={
+        <ConsentBlock
+          consent={consent}
+          onDecide={onDecide}
+          patientName={data.visit.patient.name}
+          givenByName={givenByName}
+          relation={relation}
+          onUpdateGiver={(name, rel) => {
+            setGivenByName(name)
+            setRelation(rel)
+          }}
+        />
+      }
+    />
+    {redirectReason && <Notice tone="info">{redirectReason}</Notice>}
     {error && <Notice tone="bad">{error}</Notice>}
 
     <section className="flex min-h-[115px] flex-wrap items-center gap-4 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4" aria-live="polite">

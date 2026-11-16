@@ -11,7 +11,7 @@ from sqlalchemy import inspect, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.migrate import add_missing_columns  # noqa: E402
+from app.migrate import add_missing_columns, ensure_patient_nik_unique  # noqa: E402
 from app.seed import seed  # noqa: E402
 
 
@@ -30,6 +30,22 @@ def schema_gaps():
     return missing_tables, missing_columns
 
 
+def patient_nik_integrity():
+    inspector = inspect(engine)
+    if "patients" not in inspector.get_table_names():
+        return [], False
+    with engine.connect() as conn:
+        duplicates = list(conn.execute(text(
+            "SELECT nik, COUNT(*) FROM patients WHERE nik IS NOT NULL AND nik <> '' "
+            "GROUP BY nik HAVING COUNT(*) > 1"
+        )))
+    indexes = inspector.get_indexes("patients")
+    constraints = inspector.get_unique_constraints("patients")
+    unique = any(index.get("unique") and index.get("column_names") == ["nik"] for index in indexes)
+    unique = unique or any(item.get("column_names") == ["nik"] for item in constraints)
+    return duplicates, unique
+
+
 def check_connection(inspect_only: bool = False):
     settings = get_settings()
     if not settings.database_url.startswith(("postgresql://", "postgresql+psycopg2://", "postgres://")):
@@ -45,8 +61,11 @@ def check_connection(inspect_only: bool = False):
         print(f"[INFO] Engine version: {ver[:80]}...\n")
 
     missing_tables, missing_columns = schema_gaps()
+    duplicate_niks, nik_unique = patient_nik_integrity()
     print(f"Tabel belum ada: {', '.join(missing_tables) or 'tidak ada'}")
     print(f"Kolom belum ada: {', '.join(missing_columns) or 'tidak ada'}")
+    print(f"NIK ganda: {len(duplicate_niks)} nilai")
+    print(f"Constraint/index unik NIK: {'ada' if nik_unique else 'belum ada'}")
     if inspect_only:
         print("Mode inspeksi: database tidak diubah.")
         return
@@ -60,6 +79,10 @@ def check_connection(inspect_only: bool = False):
         print(f"[INFO] Kolom ditambahkan: {', '.join(added)}")
     else:
         print("[OK] Seluruh tabel siap dan sinkron dengan model.")
+    duplicate_niks = ensure_patient_nik_unique(engine)
+    if duplicate_niks:
+        masked = [f"****{str(nik)[-4:]} ({count} data)" for nik, count in duplicate_niks]
+        raise RuntimeError("NIK ganda harus ditinjau sebelum indeks unik dipasang: " + ", ".join(masked))
 
     insp = inspect(engine)
     tables = insp.get_table_names()

@@ -143,12 +143,20 @@ export function EditPatientDialog({
               id="edit-nik"
               inputMode="numeric"
               maxLength={16}
-              className={inputClass}
+              className={`${inputClass} ${editMutation.isError && /nik|conflict|duplikat/i.test(editMutation.error.message) ? 'border-ch-bad ring-1 ring-ch-bad' : ''}`}
               value={form.nik}
-              onChange={(e) => setForm({ ...form, nik: e.target.value.replace(/\D/g, '') })}
+              onChange={(e) => {
+                setForm({ ...form, nik: e.target.value.replace(/\D/g, '') })
+                if (editMutation.isError) editMutation.reset()
+              }}
               placeholder="16 digit angka NIK"
             />
-            {errors.nik ? (
+            {editMutation.isError && /nik|conflict|duplikat/i.test(editMutation.error.message) ? (
+              <p className="mt-1 flex items-start gap-1 text-[11px] font-semibold text-ch-bad">
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span>{editMutation.error.message}</span>
+              </p>
+            ) : errors.nik ? (
               <p className="mt-1 text-[11px] text-ch-bad">{errors.nik}</p>
             ) : (
               <p className="mt-1 text-[10px] text-ch-faint">{form.nik?.length || 0}/16 digit</p>

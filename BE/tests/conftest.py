@@ -1,8 +1,12 @@
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
+
+# Unit test menyatakan SQLite secara eksplisit; aplikasi produksi tetap mewajibkan DATABASE_URL.
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from app.config import Settings
 from app.db import Base, make_engine
@@ -35,6 +39,16 @@ def db(session_factory):
 @pytest.fixture
 def doctor(db):
     return db.scalar(select(User).where(User.role == "dokter"))
+
+
+@pytest.fixture
+def medical_records_user(db):
+    return db.scalar(select(User).where(User.role == "perawat"))
+
+
+@pytest.fixture
+def admin(db):
+    return db.scalar(select(User).where(User.role == "admin"))
 
 
 @pytest.fixture

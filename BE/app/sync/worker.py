@@ -20,7 +20,7 @@ from app.satusehat.client import TransientError, outcome_codes, parse_entry_ids
 log = logging.getLogger("comehear.worker")
 
 BACKOFF_MIN = [1, 5, 30, 60, 120]
-DUPLICATE_CODES = {"20002", "20013", "duplicate"}  # sandbox: issue.code "duplicate"
+DUPLICATE_CODES = {"20002", "duplicate"}  # 20013 juga dipakai untuk resource tidak valid
 
 
 def _schedule_retry(sub: Submission, settings: Settings, reason: str) -> None:

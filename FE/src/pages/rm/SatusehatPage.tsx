@@ -1,37 +1,53 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, RefreshCw, Send } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Pencil, RefreshCw, Send, ShieldAlert } from 'lucide-react'
 import { Link } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
 import { PageTitle } from '@/components/ClinicalHeader'
+import { EditPatientDialog } from '@/components/EditPatientDialog'
 import { EmptyState, ErrorState, LoadingState } from '@/components/Feedback'
 import { Badge, btn, Dialog, Notice, Panel, SelectInput } from '@/components/ui/kit'
 import { dateShort, submissionMeta, timeWib } from '@/lib/format'
 import { getSatusehat, requeueSubmission } from '@/lib/rm'
-import type { SatusehatRow } from '@/lib/types'
+import type { Patient, SatusehatRow } from '@/lib/types'
 
 const PROCESS = ['QUEUED', 'SENDING', 'RETRY_WAIT', 'RECONCILING']
 
+export type IssueCategory = 'ok' | 'proses' | 'transient' | 'identitas' | 'klinis' | 'teknis'
+
 /** Kategori kendala (DESIGN.md §4): menentukan tindakan berikutnya. */
-function issue(row: SatusehatRow): { label: string; action: string; retry: boolean } {
-  if (row.status === 'SENT') return { label: '—', action: 'Tidak perlu tindakan', retry: false }
-  if (PROCESS.includes(row.status)) return { label: 'Sedang diproses', action: 'Tunggu proses selesai', retry: row.status === 'RETRY_WAIT' }
+function issue(row: SatusehatRow, isCorrected: boolean): { label: string; action: string; category: IssueCategory; retry: boolean } {
+  if (row.status === 'SENT') return { label: '—', action: 'Tidak perlu tindakan', category: 'ok', retry: false }
+  if (PROCESS.includes(row.status)) return { label: 'Sedang diproses', action: 'Tunggu proses selesai', category: 'proses', retry: row.status === 'RETRY_WAIT' }
   const code = `${row.last_error_code || ''} ${row.last_error_text || ''}`.toLowerCase()
-  if (/timeout|5\d\d|koneksi|connect|transport/.test(code)) return { label: 'Gangguan sementara', action: 'Kirim ulang', retry: true }
-  if (/patient|pasien|ihs|nik|identitas/.test(code)) return { label: 'Data administratif', action: 'Perbaiki identitas pasien', retry: true }
-  if (/condition|icd|diagnos|observation|klinis/.test(code)) return { label: 'Data klinis', action: 'Kembalikan ke dokter', retry: false }
-  return { label: 'Masalah teknis', action: 'Teruskan ke tim integrasi', retry: true }
+  if (/timeout|5\d\d|koneksi|connect|transport/.test(code)) return { label: 'Gangguan sementara', action: 'Kirim ulang', category: 'transient', retry: true }
+  if (/patient|pasien|ihs|nik|identitas/.test(code)) {
+    return {
+      label: 'Data administratif (Identitas)',
+      action: isCorrected ? 'Bundle baru siap dikirim ulang' : 'Koreksi identitas sebelum kirim ulang',
+      category: 'identitas',
+      retry: isCorrected, // Hanya aktif setelah koreksi selesai
+    }
+  }
+  if (/condition|icd|diagnos|observation|klinis/.test(code)) return { label: 'Data klinis', action: 'Kembalikan ke dokter', category: 'klinis', retry: false }
+  return { label: 'Masalah teknis', action: 'Teruskan ke tim integrasi', category: 'teknis', retry: true }
 }
 
 export function SatusehatPage({ user, onLogout }: SessionProps) {
   const queryClient = useQueryClient()
   const [status, setStatus] = useState('')
   const [target, setTarget] = useState<SatusehatRow | null>(null)
+  const [editingPatient, setEditingPatient] = useState<{ patient: Patient; subId: number } | null>(null)
+  const [correctedSubIds, setCorrectedSubIds] = useState<Set<number>>(() => new Set())
+  const [correctionNotice, setCorrectionNotice] = useState<string | null>(null)
+
   const sync = useQuery({ queryKey: ['satusehat'], queryFn: getSatusehat, refetchInterval: 15_000 })
   const retry = useMutation({
     mutationFn: (id: number) => requeueSubmission(id),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['satusehat'] }) },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['satusehat'] })
+    },
   })
   const all = sync.data?.rows || []
   const rows = all.filter((r) => !status || (status === 'PROSES' ? PROCESS.includes(r.status) : r.status === status))
@@ -45,32 +61,157 @@ export function SatusehatPage({ user, onLogout }: SessionProps) {
     </div>
     <Panel className="mt-4">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-[16px] font-bold">Daftar Pengiriman</h2><p className="text-[11px] text-ch-muted">Diperbarui {timeWib(sync.data?.updated_at)} · menampilkan {rows.length} dari {all.length}</p></div><div className="w-56"><SelectInput aria-label="Filter status" value={status} onChange={(e) => setStatus(e.target.value)} className="text-[13px]"><option value="">Semua status</option><option value="SENT">Berhasil Terkirim</option><option value="PROSES">Dalam Proses</option><option value="NEEDS_ATTENTION">Gagal Terkirim</option></SelectInput></div></div>
+      {correctionNotice && <div className="mt-3"><Notice tone="ok"><CheckCircle2 className="mr-1.5 inline size-4" />{correctionNotice}</Notice></div>}
       {retry.isSuccess && <div className="mt-3"><Notice>Pengiriman dimasukkan kembali ke antrean kirim.</Notice></div>}
-      <div className="mt-3 overflow-x-auto"><div className="min-w-[900px]">
-        <div className="grid grid-cols-[1.4fr_110px_1fr_160px_1.3fr_190px] rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]"><span>Pasien</span><span>Tanggal</span><span>Dokter</span><span>Status</span><span>Kendala &amp; tindakan</span><span className="text-right">Aksi</span></div>
+      <div className="mt-3 overflow-x-auto"><div className="min-w-[1000px]">
+        <div className="grid grid-cols-[1.3fr_100px_1fr_130px_1.9fr_220px] rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]"><span>Pasien</span><span>Tanggal</span><span>Dokter</span><span>Status</span><span>Kendala &amp; Detail Error</span><span className="text-right">Aksi</span></div>
         {sync.isPending ? <LoadingState /> : sync.isError ? <ErrorState message={sync.error.message} onRetry={() => sync.refetch()} /> : rows.length === 0 ? <EmptyState title={all.length ? 'Tidak ada pengiriman dengan status ini' : 'Belum ada pengiriman'} description={all.length ? 'Pilih status lain.' : 'Rekam medis dikirim otomatis setelah dokter memvalidasi SOAP.'} /> : <div className="divide-y divide-[#dde8ec]">
           {rows.map((r) => {
             const meta = submissionMeta(r.status)
-            const it = issue(r)
-            return <div key={r.id} className="grid min-h-[52px] grid-cols-[1.4fr_110px_1fr_160px_1.3fr_190px] items-center px-3 py-2 text-[12px]">
+            const isCorrected = correctedSubIds.has(r.id)
+            const it = issue(r, isCorrected)
+            const isIdentity = it.category === 'identitas'
+            const canRetry = it.retry && r.status !== 'SENT' && !PROCESS.includes(r.status)
+
+            return <div key={r.id} className="grid min-h-[58px] grid-cols-[1.3fr_100px_1fr_130px_1.9fr_220px] items-center px-3 py-2.5 text-[12px]">
               <div><p className="text-[13px] font-semibold">{r.patient?.name || '—'}</p><p className="text-[10px] text-ch-muted">RM-{r.patient?.rm_number} · {r.visit_code}</p></div>
               <span>{dateShort(r.visit_date)}</span>
               <span className="text-ch-muted">{r.doctor}</span>
               <span><Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></span>
-              <div><p className="font-semibold">{it.label}</p><p className="text-[10px] text-ch-muted">{it.action}{r.attempts ? ` · ${r.attempts} percobaan` : ''}</p></div>
-              <div className="flex justify-end gap-2">{it.retry && r.status !== 'SENT' && !PROCESS.includes(r.status) && <button type="button" onClick={() => setTarget(r)} className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-ch-brand px-2.5 text-[11px] font-semibold text-white hover:bg-ch-brand-hover"><Send className="size-3" /> Kirim Ulang</button>}<Link to={`/rm/riwayat/${r.visit_id}`} className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-ch-teal hover:underline">Lihat detail <ChevronRight className="size-3.5" /></Link></div>
+              <div className="pr-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <p className="font-semibold text-ch-ink">{it.label}</p>
+                  {isIdentity && isCorrected && <Badge tone="ok" className="text-[9px] py-0 px-1.5">Bundle Koreksi Siap</Badge>}
+                </div>
+                <p className="text-[10px] text-ch-muted">{it.action}{r.attempts ? ` · ${r.attempts} percobaan` : ''}</p>
+                {/* Tampilkan detail error SATUSEHAT langsung di daftar sebelum dialog */}
+                {(r.last_error_text || r.last_error_code) && (
+                  <div className="mt-1 rounded-[6px] border border-[#f5c6c6] bg-[#fff5f5] px-2 py-1 text-[11px] text-[#9d2525]">
+                    {r.last_error_code && <span className="mr-1 font-mono font-bold">[{r.last_error_code}]</span>}
+                    <span className="break-words font-mono text-[10.5px]">{r.last_error_text}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                {/* Alur koreksi untuk error identitas */}
+                {isIdentity && r.patient && !isCorrected && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingPatient({ patient: r.patient!, subId: r.id })}
+                    className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-[#f0c27b] bg-[#fffbf2] px-2.5 text-[11px] font-semibold text-[#b45309] hover:bg-[#fffae8]"
+                  >
+                    <Pencil className="size-3" /> Koreksi Identitas
+                  </button>
+                )}
+                {/* Tombol Kirim Ulang: aktif langsung untuk transient, atau setelah koreksi untuk error identitas */}
+                {canRetry && (
+                  <button
+                    type="button"
+                    onClick={() => setTarget(r)}
+                    className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-ch-brand px-2.5 text-[11px] font-semibold text-white hover:bg-ch-brand-hover"
+                  >
+                    <Send className="size-3" /> Kirim Ulang
+                  </button>
+                )}
+                <Link to={`/rm/riwayat/${r.visit_id}`} className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-ch-teal hover:underline">
+                  Lihat detail <ChevronRight className="size-3.5" />
+                </Link>
+              </div>
             </div>
           })}
         </div>}
       </div></div>
     </Panel>
+
+    {/* Dialog Kirim Ulang */}
     <Dialog open={!!target} onClose={() => { setTarget(null); retry.reset() }} title="Kirim ulang ke SATUSEHAT?">
-      {target && <>
-        <p className="text-sm text-ch-muted">Rekam medis <b className="text-ch-ink">{target.patient?.name}</b> ({target.visit_code}) akan dimasukkan kembali ke antrean kirim. Pengiriman ganda dicegah dengan kunci idempotensi per kunjungan.</p>
-        {target.last_error_text && <p className="mt-3 rounded-[10px] bg-ch-bad-soft p-3 text-xs text-[#8b2020]">Kendala terakhir: {target.last_error_text}</p>}
-        {retry.isError && <div className="mt-3"><Notice tone="bad">{retry.error.message} Data tetap tersimpan, Anda dapat mencoba lagi.</Notice></div>}
-        <div className="mt-5 flex justify-end gap-3"><button type="button" className={btn.outline} onClick={() => { setTarget(null); retry.reset() }}>Batal</button><button type="button" className={btn.primary} disabled={retry.isPending} onClick={() => retry.mutate(target.id, { onSuccess: () => setTarget(null) })}>{retry.isPending ? 'Mengirim…' : 'Kirim Ulang'}</button></div>
-      </>}
+      {target && (() => {
+        const isTargetCorrected = correctedSubIds.has(target.id)
+        const targetIssue = issue(target, isTargetCorrected)
+        const isIdentity = targetIssue.category === 'identitas'
+        const requireCorrectionFirst = isIdentity && !isTargetCorrected
+
+        return <>
+          <p className="text-sm text-ch-muted">
+            Rekam medis <b className="text-ch-ink">{target.patient?.name}</b> ({target.visit_code}) akan dimasukkan kembali ke antrean kirim SATUSEHAT.
+          </p>
+
+          {target.last_error_text && (
+            <div className="mt-3 rounded-[10px] bg-ch-bad-soft p-3 text-xs text-[#8b2020]">
+              <p className="font-semibold">Detail Kendala Terakhir:</p>
+              <p className="mt-1 font-mono">{target.last_error_text}</p>
+            </div>
+          )}
+
+          {requireCorrectionFirst ? (
+            <div className="mt-3 rounded-[10px] border border-[#f0c27b] bg-[#fffaf0] p-3 text-xs text-[#92400e]">
+              <div className="flex items-start gap-2">
+                <ShieldAlert className="size-4 shrink-0 text-[#d97706] mt-0.5" />
+                <div>
+                  <p className="font-semibold">Perbaikan Identitas Diperlukan</p>
+                  <p className="mt-1">
+                    Error identitas tidak dapat dikirim ulang dengan bundle lama. Anda harus melakukan koreksi identitas pasien terlebih dahulu agar bundle baru dapat disusun dan divalidasi.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = target.patient
+                    const subId = target.id
+                    setTarget(null)
+                    if (p) setEditingPatient({ patient: p, subId })
+                  }}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[8px] bg-[#d97706] px-3 text-[12px] font-semibold text-white hover:bg-[#b45309]"
+                >
+                  <Pencil className="size-3" /> Koreksi Identitas Sekarang
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-ch-muted">
+              {isIdentity && isTargetCorrected
+                ? 'Bundle koreksi baru telah disusun berdasarkan data identitas terkini dan siap dikirim.'
+                : 'Pengiriman ganda dicegah dengan kunci idempotensi per kunjungan.'}
+            </p>
+          )}
+
+          {retry.isError && (
+            <div className="mt-3">
+              <Notice tone="bad">{retry.error.message} Data tetap tersimpan, Anda dapat mencoba lagi.</Notice>
+            </div>
+          )}
+
+          <div className="mt-5 flex justify-end gap-3">
+            <button type="button" className={btn.outline} onClick={() => { setTarget(null); retry.reset() }}>
+              Batal
+            </button>
+            <button
+              type="button"
+              className={btn.primary}
+              disabled={retry.isPending || requireCorrectionFirst}
+              onClick={() => retry.mutate(target.id, { onSuccess: () => setTarget(null) })}
+            >
+              {retry.isPending ? 'Mengirim…' : 'Kirim Ulang'}
+            </button>
+          </div>
+        </>
+      })()}
     </Dialog>
+
+    {/* Dialog Koreksi Identitas Pasien */}
+    <EditPatientDialog
+      patient={editingPatient?.patient || null}
+      open={!!editingPatient}
+      onClose={() => setEditingPatient(null)}
+      onSuccess={(updated) => {
+        if (editingPatient) {
+          setCorrectedSubIds((prev) => new Set([...prev, editingPatient.subId]))
+          setCorrectionNotice(`Identitas pasien ${updated.name} berhasil diperbarui. Bundle koreksi baru siap dikirim ulang.`)
+        }
+        setEditingPatient(null)
+      }}
+    />
   </AppShell>
 }

@@ -55,7 +55,37 @@ function DoctorVisitRoute({ user, onLogout, onSessionExpired }: SessionProps) {
   const data = consultation.data!
   if (data.locked) return <Navigate to={`/kunjungan/${id}/resume`} replace />
   const hasSubjective = Boolean(data.note.subjective_summary.trim() || Object.values(data.note.subjective).some((value) => String(value).trim()))
-  if (stage !== 'subjektif' && !data.visit.consent && !hasSubjective && !data.session) return <Navigate to={`/kunjungan/${id}/subjektif`} replace />
+
+  if (stage === 'draf-s') {
+    if (data.visit.status === 'manual') {
+      return (
+        <Navigate
+          to={`/kunjungan/${id}/subjektif`}
+          replace
+          state={{ redirectReason: 'Pasien menolak perekaman AI. Anda dialihkan ke halaman pengisian Subjektif manual.' }}
+        />
+      )
+    }
+    if (!data.session && !hasSubjective && !data.failed_session) {
+      return (
+        <Navigate
+          to={`/kunjungan/${id}/subjektif`}
+          replace
+          state={{ redirectReason: 'Belum ada rekaman audio atau draf Subjektif. Anda dialihkan ke halaman Subjektif untuk memulai perekaman.' }}
+        />
+      )
+    }
+  }
+
+  if (stage !== 'subjektif' && !data.visit.consent && !hasSubjective && !data.session) {
+    return (
+      <Navigate
+        to={`/kunjungan/${id}/subjektif`}
+        replace
+        state={{ redirectReason: 'Lengkapi persetujuan dan data Subjektif terlebih dahulu sebelum berpindah tahap.' }}
+      />
+    )
+  }
 
   const page = stage === 'subjektif' ? <SubjectivePage data={data} />
     : stage === 'draf-s' ? <DraftSubjectivePage data={data} />

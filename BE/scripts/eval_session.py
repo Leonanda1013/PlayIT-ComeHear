@@ -8,14 +8,16 @@ dan daftar kata yang salah supaya istilah medis/Jawa yang sering keliru terlihat
 """
 import argparse
 import difflib
-import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from app.config import get_settings  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
+from app.db import SessionLocal  # noqa: E402
+from app.models import ScribeSession  # noqa: E402
 from app.scribe.asr import parse_text_transcript  # noqa: E402
 from app.scribe.textnorm import normalize, wer  # noqa: E402
 
@@ -31,15 +33,16 @@ def main():
     ap.add_argument("--session", type=int)
     a = ap.parse_args()
 
-    db_path = get_settings().database_url.removeprefix("sqlite:///")
-    con = sqlite3.connect(db_path)
-    q = "select id, transcript, timings, model_info from scribe_sessions where status='done' and audio_path is not null"
-    row = con.execute(q + (" and id=?" if a.session else " order by id desc limit 1"),
-                      (a.session,) if a.session else ()).fetchone()
+    query = select(ScribeSession).where(ScribeSession.status == "done", ScribeSession.audio_path.is_not(None))
+    if a.session:
+        query = query.where(ScribeSession.id == a.session)
+    else:
+        query = query.order_by(ScribeSession.id.desc()).limit(1)
+    with SessionLocal() as db:
+        row = db.scalar(query)
     if not row:
         raise SystemExit("Tidak ada sesi audio yang selesai.")
-    import json
-    sid, transcript, timings, info = row[0], json.loads(row[1]), json.loads(row[2] or "{}"), json.loads(row[3] or "{}")
+    sid, transcript, timings, info = row.id, row.transcript or [], row.timings or {}, row.model_info or {}
     ref_segs = parse_text_transcript(Path(a.reference).read_text(encoding="utf-8"))
     ref = " ".join(s["text"] for s in ref_segs)
     hyp = " ".join(s["text"] for s in transcript)

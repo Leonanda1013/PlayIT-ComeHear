@@ -21,6 +21,22 @@ export const getScribe = (id: number) => apiRequest<ScribeState>(visitPath(id, '
 export const getResume = (id: number) => apiRequest<Resume>(visitPath(id, '/resume'))
 export const saveSoap = (id: number, data: Record<string, string>) => apiRequest<{ status: string; detail?: string; submission_id?: number }>(visitPath(id, '/soap'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 
+export async function finishAudioSession(id: number, sessionId: number) {
+  const body = new FormData()
+  body.set('session_id', String(sessionId))
+  return apiRequest<{ session_id: number; status: string }>(visitPath(id, '/audio-finish'), { method: 'POST', body })
+}
+
+export async function closeAudioSession(id: number, sessionId: number) {
+  const body = new FormData()
+  body.set('session_id', String(sessionId))
+  try {
+    return await apiRequest(visitPath(id, '/recording/close'), { method: 'POST', body })
+  } catch {
+    return await apiRequest(visitPath(id, '/audio-finish'), { method: 'POST', body })
+  }
+}
+
 export function formatWib(value: string | null | undefined) {
   return value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' }).format(new Date(value)) : '—'
 }

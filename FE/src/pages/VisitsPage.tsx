@@ -125,8 +125,13 @@ function QueueRow({ visit, onCall, onResume, hideTopLine }: { visit: Visit; onCa
       <div className="min-w-0 pl-1 pr-4"><p className="truncate text-[15px] font-semibold text-ch-ink">{visit.patient.name}</p><p className="truncate text-[13px] text-[#4b5f70]">{meta}</p></div>
       <span><span className={`inline-flex rounded-[5px] border px-2.5 py-[2px] text-[13px] font-medium ${draft[1]}`}>{draft[0]}</span></span>
       <div className="flex flex-col items-center gap-[10px]">
-        {/* Tujuan tombol Panggil di baris aktif menyusul; sementara belum melakukan apa pun. */}
-        <button type="button" className="inline-flex h-[34px] w-[126px] items-center justify-center gap-2 rounded-[8px] border border-[#d6e3e9] bg-white text-[15px] font-semibold text-ch-ink hover:border-ch-brand">Panggil <Megaphone className="size-4 text-ch-brand" /></button>
+        <button
+          type="button"
+          onClick={onCall}
+          className="inline-flex h-[34px] w-[126px] items-center justify-center gap-2 rounded-[8px] border border-[#d6e3e9] bg-white text-[15px] font-semibold text-ch-ink transition-colors hover:border-ch-brand hover:bg-[#eef8fa]"
+        >
+          Panggil <Megaphone className="size-4 text-ch-brand" />
+        </button>
         <Link to={`/kunjungan/${visit.id}/subjektif`} className="inline-flex h-9 w-[126px] items-center justify-center gap-2 rounded-[8px] bg-ch-brand text-[13px] font-bold text-white hover:bg-ch-brand-hover">Isi SOAP <ArrowRight className="size-4" /></Link>
       </div>
     </article>
