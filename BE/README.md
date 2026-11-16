@@ -40,6 +40,14 @@ transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI
 Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python scripts/upgrade_demo.py`
 (menambah kolom baru tanpa menghapus data, lalu mengisi antrean demo).
 
+### Supabase PostgreSQL
+
+1. Dari folder `BE`, isi `DATABASE_URL` di `.env` dengan URI PostgreSQL Supabase dari **Database → Connect**. `.env` diabaikan Git. Isi juga `SECRET_KEY` dan `DEMO_PASSWORD`.
+2. Untuk database yang sudah berisi data, jalankan `.venv/Scripts/python scripts/test_db_connection.py --inspect-only` lebih dulu. Perintah ini hanya membaca koneksi serta menunjukkan tabel dan kolom yang belum ada.
+3. Jika migrasi diperlukan, buat backup lalu jalankan `.venv/Scripts/python scripts/test_db_connection.py`. Perintah ini membuat tabel, menambah kolom, dan melakukan seed pada database baru. Startup server juga melakukan inisialisasi yang sama.
+
+Versi Scribe/ICD-10 saat ini memerlukan `data/icd10_satusehat.csv` dengan kolom `CODE,DISPLAY,VERSION`. File ini dibaca dari disk, bukan dari tabel PostgreSQL; tanpa file tersebut, pencarian ICD-10 dan pipeline Scribe gagal.
+
 | Variabel `.env` | Untuk |
 |---|---|
 | `LLM_PROVIDERS` | `gemini,anthropic` (dicoba berurutan). `mock` hanya untuk uji alur, bukan hasil klinis. |
@@ -47,8 +55,8 @@ Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python 
 | `SATUSEHAT_MODE` | `mock` (tanpa internet) atau `sandbox` (isi `SATUSEHAT_CLIENT_ID/SECRET`; cocokkan URL dengan environment Postman). |
 | `ASR_MODEL` | `small`/`medium`/`large-v3-turbo`, atau path folder CT2 hasil `notebooks/train_asr_v2.ipynb`. |
 
-Tabel ICD-10 lengkap: taruh `icd10_satusehat.csv` (kolom `CODE,DISPLAY,VERSION`, dari eksplorasi Nisa) di
-`data/`. Tanpa file itu dipakai `data/icd10_seed.csv` (±40 kode umum poli anak).
+Katalog ICD-10 lengkap: taruh `icd10_satusehat.csv` (kolom `CODE,DISPLAY,VERSION`, dari eksplorasi Nisa) di
+`data/`.
 
 ## Uji
 
