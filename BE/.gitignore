@@ -7,7 +7,6 @@ __pycache__/
 *.db-shm
 *.db-wal
 data/audio/
-data/icd10_satusehat.csv
 models/
 .pytest_cache/
 last_rejected_bundle.json
