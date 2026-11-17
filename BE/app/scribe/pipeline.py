@@ -181,6 +181,10 @@ def run_suggest_icd(
 
         try:
             icd, models = suggest_icd(subj, icd_table(settings), llm, objective=obj)
+            if not icd or not isinstance(icd, dict) or not icd.get("utama"):
+                log.warning("Hasil usulan ICD kosong; pertahankan usulan sebelumnya untuk kunjungan %s.", visit_id)
+                return
+
             ss = next((s for s in reversed(visit.scribe_sessions) if s.status not in ("failed", "replaced", "abandoned")), None)
             if ss:
                 ss.icd_suggestions = icd

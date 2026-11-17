@@ -154,6 +154,9 @@ MEDICAL_SYNONYMS: dict[str, tuple[str, ...]] = {
     "kencing": ("urinary tract infection", "urinary"),
     "dehydration": ("volume depletion", "dehydration"),
     "dehidrasi": ("volume depletion", "dehydration"),
+    "thirst": ("volume depletion", "dehydration"),
+    "dry throat": ("volume depletion", "dehydration"),
+    "oliguria": ("volume depletion", "dehydration"),
 }
 
 
@@ -378,41 +381,38 @@ def postprocess(
     if sekunder is None:
         return chosen_utama
 
-    # 2. Proses grup-grup SEKUNDER
-    chosen_sekunder: list[list[dict]] = []
-    raw_groups = list(sekunder)
-    for grp in raw_groups:
+    # 2. Proses SEKUNDER (list datar maks 3 kode)
+    raw_sekunder = list(sekunder)
+    raw_items: list[Any] = []
+    for grp in raw_sekunder:
         if hasattr(grp, "pilihan"):
-            items = getattr(grp, "pilihan") or []
+            raw_items.extend(getattr(grp, "pilihan") or [])
         elif isinstance(grp, dict) and "pilihan" in grp:
-            items = grp.get("pilihan") or []
+            raw_items.extend(grp.get("pilihan") or [])
         elif isinstance(grp, (list, tuple)):
-            items = grp
-        else:
-            items = [grp] if grp else []
+            raw_items.extend(grp)
+        elif grp:
+            raw_items.append(grp)
 
-        cleaned_group: list[dict] = []
-        seen_in_group: set[str] = set()
+    cleaned_sekunder: list[dict] = []
+    seen_in_sekunder: set[str] = set()
 
-        for it in sorted(items, key=lambda x: -getattr(x, "keyakinan", 0.0) if not isinstance(x, dict) else -float(x.get("keyakinan", 0.0))):
-            cl = _clean_item(it)
-            if not cl:
-                continue
-            code = cl["code"]
-            # Aturan d: Buang kode dari sekunder jika sudah muncul di utama
-            # serta hindari duplikat antar-grup sekunder
-            if code in seen_codes or code in seen_in_group:
-                continue
-            seen_in_group.add(code)
-            cleaned_group.append(cl)
+    for it in sorted(raw_items, key=lambda x: -getattr(x, "keyakinan", 0.0) if not isinstance(x, dict) else -float(x.get("keyakinan", 0.0))):
+        cl = _clean_item(it)
+        if not cl:
+            continue
+        code = cl["code"]
+        # Aturan d: Buang kode dari sekunder jika sudah muncul di utama
+        # serta hindari duplikat di sekunder
+        if code in seen_codes or code in seen_in_sekunder:
+            continue
+        seen_in_sekunder.add(code)
+        cleaned_sekunder.append(cl)
 
-        # Aturan c: Buang kode induk jika turunannya terpilih dalam grup yang sama
-        final_group = _dedupe_parent_child(cleaned_group)[:k]
-        if final_group:
-            seen_codes.update(c["code"] for c in final_group)
-            chosen_sekunder.append(final_group)
+    # Aturan c: Buang kode induk jika turunannya terpilih dalam sekunder
+    final_sekunder = _dedupe_parent_child(cleaned_sekunder)[:k]
 
     return {
         "utama": chosen_utama,
-        "sekunder": chosen_sekunder,
+        "sekunder": final_sekunder,
     }

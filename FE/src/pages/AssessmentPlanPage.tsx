@@ -43,18 +43,19 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const rawSugg = data.session?.icd_suggestions
+  const rawSugg = data.session?.icd_suggestions || (data.note?.extra as Record<string, unknown> | undefined)?.icd_suggestions
   const utamaList: IcdSuggestion[] = Array.isArray(rawSugg)
     ? rawSugg
     : (rawSugg && typeof rawSugg === 'object' && Array.isArray((rawSugg as IcdSuggestionsResult).utama))
     ? (rawSugg as IcdSuggestionsResult).utama
     : []
 
-  const sekunderGroups: IcdSuggestion[][] = (!Array.isArray(rawSugg) && rawSugg && typeof rawSugg === 'object' && Array.isArray((rawSugg as IcdSuggestionsResult).sekunder))
+  const rawSekunder = (!Array.isArray(rawSugg) && rawSugg && typeof rawSugg === 'object' && Array.isArray((rawSugg as IcdSuggestionsResult).sekunder))
     ? (rawSugg as IcdSuggestionsResult).sekunder
     : []
+  const sekunderList: IcdSuggestion[] = rawSekunder.flatMap((item: unknown) => (Array.isArray(item) ? item : [item as IcdSuggestion])).slice(0, 3)
 
-  const hasSuggestions = utamaList.length > 0 || sekunderGroups.length > 0
+  const hasSuggestions = utamaList.length > 0 || sekunderList.length > 0
 
   // Polling pembaruan rekomendasi jika rekomendasi background baru saja dipicu dan sedang diproses
   useEffect(() => {
@@ -110,14 +111,13 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
           {utamaList.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <span className="font-semibold text-[#1f4e5b]">Diagnosis Utama (Top {utamaList.length}):</span>
-              {utamaList.map((item) => {
-                const confPercent = item.keyakinan ? Math.round(item.keyakinan * 100) : null
+              {utamaList.map((item, idx) => {
                 const isSelected = s.dx[0]?.icd?.code === item.code
                 return (
                   <button
                     key={item.code}
                     type="button"
-                    title={item.alasan ? `${item.alasan}${confPercent ? ` (${confPercent}%)` : ''}` : item.display}
+                    title={item.alasan ? `${item.alasan} (Top ${idx + 1})` : item.display}
                     onClick={() => {
                       patchDx(0, {
                         icd: { code: item.code, display: item.display },
@@ -130,63 +130,59 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
                         : 'border-[#9ddce5] bg-white text-[#174b55] hover:border-ch-brand hover:bg-[#eaf7f9]'
                     }`}
                   >
+                    <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-semibold ${isSelected ? 'bg-white/20 text-white' : 'bg-[#e0f3f6] text-ch-teal'}`}>
+                      Top {idx + 1}
+                    </span>
                     <b>{item.code}</b>
                     <span>· {item.deskripsi_id || item.display}</span>
-                    {confPercent && <span className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-ch-teal'}`}>({confPercent}%)</span>}
                   </button>
                 )
               })}
             </div>
           )}
 
-          {sekunderGroups.length > 0 && (
-            <div className="space-y-2 border-t border-[#d4edf2] pt-2">
-              <span className="font-semibold text-[#1f4e5b] block">Diagnosis Sekunder / Komorbid Terindikasi:</span>
-              <div className="space-y-2">
-                {sekunderGroups.map((group, grpIdx) => (
-                  <div key={grpIdx} className="flex flex-wrap items-center gap-2 pl-2 border-l-2 border-[#b5e4ec]">
-                    <span className="text-[11px] font-medium text-ch-muted">Grup {grpIdx + 1}:</span>
-                    {group.map((item) => {
-                      const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)
-                      const confPercent = item.keyakinan ? Math.round(item.keyakinan * 100) : null
-                      return (
-                        <button
-                          key={item.code}
-                          type="button"
-                          title={item.alasan ? `${item.alasan}${confPercent ? ` (${confPercent}%)` : ''}` : item.display}
-                          onClick={() => {
-                            const emptySecIdx = s.dx.findIndex((d, i) => i > 0 && !d.icd)
-                            if (emptySecIdx > 0) {
-                              patchDx(emptySecIdx, {
-                                icd: { code: item.code, display: item.display },
-                                text: s.dx[emptySecIdx].text || item.deskripsi_id || item.display,
-                              })
-                            } else {
-                              set('dx', [
-                                ...s.dx,
-                                {
-                                  text: item.deskripsi_id || item.display,
-                                  icd: { code: item.code, display: item.display },
-                                  onset: 'akut',
-                                },
-                              ])
-                            }
-                          }}
-                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
-                            isSelected
-                              ? 'border-[#2d8d87] bg-[#2d8d87] text-white font-bold'
-                              : 'border-[#b6e4ea] bg-white text-[#1f5c66] hover:border-ch-brand hover:bg-[#eef8fa]'
-                          }`}
-                        >
-                          <b>{item.code}</b>
-                          <span>· {item.deskripsi_id || item.display}</span>
-                          {confPercent && <span className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-ch-teal'}`}>({confPercent}%)</span>}
-                        </button>
-                      )
-                    })}
-                  </div>
-                ))}
-              </div>
+          {sekunderList.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-[#d4edf2] pt-2">
+              <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Maks {sekunderList.length}):</span>
+              {sekunderList.map((item, idx) => {
+                const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)
+                return (
+                  <button
+                    key={item.code}
+                    type="button"
+                    title={item.alasan ? `${item.alasan} (Top ${idx + 1})` : item.display}
+                    onClick={() => {
+                      const emptySecIdx = s.dx.findIndex((d, i) => i > 0 && !d.icd)
+                      if (emptySecIdx > 0) {
+                        patchDx(emptySecIdx, {
+                          icd: { code: item.code, display: item.display },
+                          text: s.dx[emptySecIdx].text || item.deskripsi_id || item.display,
+                        })
+                      } else {
+                        set('dx', [
+                          ...s.dx,
+                          {
+                            text: item.deskripsi_id || item.display,
+                            icd: { code: item.code, display: item.display },
+                            onset: 'akut',
+                          },
+                        ])
+                      }
+                    }}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
+                      isSelected
+                        ? 'border-[#2d8d87] bg-[#2d8d87] text-white font-bold'
+                        : 'border-[#b6e4ea] bg-white text-[#1f5c66] hover:border-ch-brand hover:bg-[#eef8fa]'
+                    }`}
+                  >
+                    <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-semibold ${isSelected ? 'bg-white/20 text-white' : 'bg-[#e1f3f5] text-[#246d68]'}`}>
+                      Top {idx + 1}
+                    </span>
+                    <b>{item.code}</b>
+                    <span>· {item.deskripsi_id || item.display}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

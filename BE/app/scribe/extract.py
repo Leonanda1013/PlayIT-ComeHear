@@ -58,7 +58,7 @@ class SubjectiveExtractionV3(SubjectiveExtraction):
     """Skema ekstraksi v3.2: menyertakan kata_kunci_icd10_en dalam satu panggilan LLM."""
     kata_kunci_icd10_en: list[str] = Field(
         default_factory=list,
-        description="5-10 istilah medis Inggris dasar untuk keluhan SAAT INI (bukan yang disangkal)."
+        description="5-10 istilah medis Inggris standar ICD-10 untuk diagnosis, sindrom, komplikasi, dan kondisi saat ini."
     )
 
 
@@ -194,12 +194,13 @@ def bangun_prompt_s(segmen_aman: list[dict], butuh_pembicara: bool) -> str:
         "harus tercermin di riwayat_alergi; fakta di gejala_disangkal harus tercermin di riwayat_penyakit_sekarang "
         "(lihat aturan #8). Lakukan pengecekan ulang ini sebagai langkah terakhir sebelum menjawab.\n"
         f"{aturan_pembicara}"
-        "14. kata_kunci_icd10_en: 5-10 istilah medis Inggris dasar HANYA untuk keluhan saat ini (keluhan utama "
-        "dan gejala penyerta yang ADA). Jangan masukkan riwayat alergi, penyakit dahulu, obat, atau gejala yang "
-        "disangkal. Sertakan sinonim istilah ICD (mis. nyeri ulu hati -> 'epigastric pain' dan 'upper "
-        "abdominal pain'; nyeri saat menelan -> 'odynophagia'/'sore throat', BUKAN 'dysphagia') dan boleh 2-3 "
-        "kondisi umum yang konsisten dengan keluhan (mis. 'common cold', 'acute pharyngitis', 'upper "
-        "respiratory infection'), tetapi bukan diagnosis yang tidak didukung transkrip.\n\n"
+        "14. kata_kunci_icd10_en: 5-10 istilah medis Inggris standar ICD-10. Tidak hanya menerjemahkan gejala "
+        "secara literal, tetapi utamakan menyimpulkan nama diagnosis penyakit/kondisi, sindrom, serta komplikasi dari "
+        "gabungan gejala dan riwayat. Sertakan 'dehydration' dan 'volume depletion' HANYA bila ada dua atau lebih tanda "
+        "dehidrasi (mis. haus/tenggorokan kering, lemas, BAK berkurang/sedikit, mulut kering). Sertakan etiologi (mis. "
+        "infectious gastroenteritis, foodborne) bila ada riwayat yang mendukung (mis. konsumsi makanan tertentu/pedas/basi, paparan). "
+        "Sertakan penyakit penyerta atau riwayat kronis yang relevan (mis. gastritis, dyspepsia, hypertension). "
+        "Jangan masukkan kondisi/gejala yang disangkal. Contoh di atas hanya ilustrasi, sesuaikan secara objektif dengan kasus.\n\n"
         f"{_contoh_acuan(butuh_pembicara)}"
         f"TRANSKRIP:\n{render_transcript(segmen_aman)}")
 
@@ -211,22 +212,31 @@ def bangun_prompt_icd(
     keywords: list[str],
     kandidat: list[tuple[str, str]],
     objective: Optional[str] = None,
+    rpd: Optional[str] = None,
 ) -> str:
     obj_section = f"PEMERIKSAAN OBJEKTIF / FISIK:\n{objective}\n\n" if objective else ""
+    rpd_section = f"RIWAYAT PENYAKIT DAHULU: {rpd or '-'}\n" if rpd is not None else ""
     return (
         "Pilih kode ICD-10 sebagai USULAN untuk dokter, HANYA dari daftar KANDIDAT di bawah (salin kode persis).\n"
         "Bagi keluaran menjadi dua kategori terpisah:\n"
-        "1. `utama`: 1-3 pilihan kode ICD-10 terbaik untuk Diagnosis Utama (keluhan utama/kondisi primer saat ini), diurutkan dari keyakinan tertinggi.\n"
-        "2. `sekunder`: list berisi 0 atau lebih grup diagnosis sekunder (komorbid, penyakit penyerta, atau gejala sekunder yang membutuhkan penanganan terpisah). Setiap grup berisi 1-3 pilihan kode ICD-10. Jika tidak ada indikasi diagnosis sekunder, kembalikan list kosong [].\n\n"
-        "Aturan Pemilihan:\n"
-        "- Dasarkan pada keluhan saat ini dan data objektif/fisik (bila ada).\n"
-        "- JANGAN memilih kode yang dasarnya riwayat alergi lama atau penyakit masa lalu yang sudah sembuh, dan JANGAN memilih kode untuk gejala yang disangkal.\n"
-        "- Pilih kode paling spesifik; jangan memilih kode induk (mis. R10) sekaligus turunannya (mis. R10.1) dalam grup yang sama.\n"
+        "1. `utama`: 3-4 pilihan kode ICD-10 spesifik (gunakan kode turunan yang memiliki subtipe/titik desimal, BUKAN kode induk bersama turunannya) untuk Diagnosis Utama (keluhan utama/kondisi primer saat ini), diurutkan dari keyakinan tertinggi.\n"
+        "2. `sekunder`: list datar berisi maksimal 3 kode ICD-10 untuk diagnosis sekunder. Jika tidak ada indikasi diagnosis sekunder yang memenuhi kriteria, kembalikan list kosong [].\n\n"
+        "Aturan Pemilihan Diagnosis Sekunder:\n"
+        "- Diagnosis sekunder HANYA untuk:\n"
+        "  (a) komplikasi nyata yang membutuhkan perhatian atau terapi tambahan (misalnya dehidrasi E86 bila terdapat tanda-tanda dehidrasi),\n"
+        "  (b) penyakit penyerta (komorbid) atau riwayat kronis yang relevan (pada field `alasan` WAJIB eksplisit menyebutkan bahwa itu adalah riwayat/komorbid).\n"
+        "- DILARANG memilih kode gejala (awalan R) jika gejala tersebut sudah menjadi bagian klinis dari diagnosis utama (misalnya dilarang memilih R10.4, R53, R11, atau R50 jika diagnosis utama adalah gastroenteritis/diare).\n"
+        "- DILARANG memilih kode R34 (anuria/oliguria) kecuali jika terdapat data pengukuran volume urin yang jelas dan terdokumentasi.\n"
+        "- Jika tidak ada komplikasi nyata atau riwayat relevan, kosongkan list sekunder [].\n\n"
+        "Aturan Umum:\n"
+        "- Pilih kode paling spesifik; jangan memilih kode induk (mis. R10) sekaligus turunannya (mis. R10.1).\n"
         "- Hindari kode penyebab eksternal (awalan V, W, X, Y).\n"
-        "- `keyakinan` (0.0 - 1.0): berikan perkiraan keyakinan klinis yang realistis (>= 0.7 bila gejala/tanda kuat mendukung, 0.3 - 0.5 bila masih dugaan awal/gejala non-spesifik).\n"
-        "- `alasan`: sertakan alasan singkat berdasarkan anamnesis/pemeriksaan.\n\n"
+        "- JANGAN memilih kode untuk gejala yang disangkal.\n"
+        "- `keyakinan` (0.0 - 1.0): berikan perkiraan keyakinan klinis yang realistis (>= 0.7 bila gejala/tanda kuat mendukung, 0.3 - 0.5 bila dugaan awal/riwayat).\n"
+        "- `alasan`: WAJIB menyertakan alasan singkat yang menyebutkan bukti konkret dari data subjective/objective.\n\n"
         f"KELUHAN UTAMA: {keluhan or '-'}\n"
         f"RIWAYAT PENYAKIT SEKARANG: {rps or '-'}\n"
+        f"{rpd_section}"
         f"GEJALA DISANGKAL: {', '.join(disangkal) or '-'}\n"
         f"{obj_section}"
         f"KATA KUNCI: {', '.join(keywords)}\n\n"
@@ -358,8 +368,13 @@ def icd_keywords(text: str, llm: LLM) -> list[str]:
         return kw.english_keywords
 
     prompt = (
-        "Ubah data klinis pasien berikut menjadi 5-10 istilah medis Inggris standar ICD-10 untuk keluhan SAAT INI "
-        "(gejala dan dugaan penyakit yang ADA, misal 'fever', 'dengue fever', 'headache'). Abaikan gejala yang disangkal.\n\n"
+        "Ubah data klinis pasien berikut menjadi 5-10 istilah medis Inggris standar ICD-10. Tidak hanya "
+        "menerjemahkan gejala secara literal, tetapi utamakan menyimpulkan nama diagnosis penyakit/kondisi, "
+        "sindrom, serta komplikasi dari gabungan gejala dan riwayat. Sertakan 'dehydration' dan 'volume depletion' "
+        "HANYA bila ada dua atau lebih tanda dehidrasi (haus/tenggorokan kering, lemas, BAK berkurang, mulut kering). "
+        "Sertakan etiologi (mis. infectious gastroenteritis, foodborne) bila ada riwayat yang mendukung. "
+        "Sertakan penyakit penyerta atau riwayat kronis yang relevan (mis. gastritis, dyspepsia, hypertension). "
+        "Abaikan kondisi/gejala yang disangkal. Contoh di atas hanya ilustrasi, sesuaikan secara objektif dengan kasus.\n\n"
         + clean
     )
     try:
@@ -372,8 +387,9 @@ def icd_keywords(text: str, llm: LLM) -> list[str]:
 
 def _format_clinical_context(
     subjective: dict | str, objective: Optional[dict | str] = None
-) -> tuple[str, str, list[str], str, str]:
-    """Ekstraksi teks keluhan, rps, disangkal, rangkuman, dan data objektif secara stateless."""
+) -> tuple[str, str, list[str], str, str, str]:
+    """Ekstraksi teks keluhan, rps, disangkal, rangkuman, data objektif, dan rpd secara stateless."""
+    rpd = ""
     if isinstance(subjective, str):
         keluhan = subjective.strip()
         rps = ""
@@ -382,12 +398,18 @@ def _format_clinical_context(
     elif isinstance(subjective, dict):
         summary = (subjective.get("rangkuman_s") or "").strip()
         ku = subjective.get("keluhan_utama")
-        keluhan = (ku.get("nilai") if isinstance(ku, dict) else str(ku or "")).strip()
+        keluhan = (ku.get("nilai") or "" if isinstance(ku, dict) else str(ku or "")).strip()
         r = subjective.get("riwayat_penyakit_sekarang")
-        rps = (r.get("nilai") if isinstance(r, dict) else str(r or "")).strip()
+        rps = (r.get("nilai") or "" if isinstance(r, dict) else str(r or "")).strip()
         disangkal = list(subjective.get("gejala_disangkal") or [])
+        rpd_raw = subjective.get("riwayat_penyakit_dahulu")
+        rpd = (rpd_raw.get("nilai") or "" if isinstance(rpd_raw, dict) else str(rpd_raw or "")).strip()
         if not summary:
-            parts = [f"Keluhan: {keluhan}" if keluhan else "", f"RPS: {rps}" if rps else ""]
+            parts = [
+                f"Keluhan: {keluhan}" if keluhan else "",
+                f"RPS: {rps}" if rps else "",
+                f"RPD: {rpd}" if rpd else "",
+            ]
             summary = "; ".join(p for p in parts if p)
     else:
         keluhan, rps, disangkal, summary = "", "", [], ""
@@ -403,7 +425,7 @@ def _format_clinical_context(
     elif isinstance(objective, str):
         obj_str = objective.strip()
 
-    return keluhan, rps, disangkal, summary, obj_str
+    return keluhan, rps, disangkal, summary, obj_str, rpd
 
 
 def icd_pick(
@@ -414,7 +436,7 @@ def icd_pick(
     objective: Optional[dict | str] = None,
 ) -> tuple[dict, dict]:
     """Pencarian maksimal 50 kandidat ICD-10 lokal + reranking top utama & sekunder oleh LLM + postprocessing."""
-    keluhan, rps, disangkal, summary, obj_str = _format_clinical_context(subjective, objective)
+    keluhan, rps, disangkal, summary, obj_str, rpd = _format_clinical_context(subjective, objective)
 
     # Kata kunci yang digunakan: gabungan keywords + kata_kunci_icd10_en jika ada di subjective
     kw_sub = subjective.get("kata_kunci_icd10_en") if isinstance(subjective, dict) else []
@@ -422,7 +444,13 @@ def icd_pick(
 
     if not kw_used:
         if keluhan or rps or summary:
-            kw_used = icd_keywords(f"KELUHAN: {keluhan}\nRPS: {rps}\nRANGKUMAN: {summary}", llm)
+            kw_context = [
+                f"KELUHAN: {keluhan}" if keluhan else "",
+                f"RPS: {rps}" if rps else "",
+                f"RPD: {rpd}" if rpd else "",
+                f"RANGKUMAN: {summary}" if summary else "",
+            ]
+            kw_used = icd_keywords("\n".join(c for c in kw_context if c), llm)
         else:
             kw_used = ["fever"]
 
@@ -433,14 +461,14 @@ def icd_pick(
     if not kandidat and all_kws:
         kandidat = [(r.code, r.display) for r in retrieve(rows, all_kws, limit=JUMLAH_KANDIDAT)]
 
-    if not kandidat or not (keluhan or rps or summary or obj_str):
+    if not kandidat or not (keluhan or rps or summary or obj_str or rpd):
         empty_res = postprocess([], [], rows=rows)
         return empty_res if isinstance(empty_res, dict) else {"utama": [], "sekunder": []}, {
             "keywords": kw_used, "candidates": len(kandidat)
         }
 
-    # c. LLM rerank memilih utama (1-3) dan sekunder (grup)
-    prompt = bangun_prompt_icd(keluhan, rps, disangkal, kw_used, kandidat, objective=obj_str)
+    # c. LLM rerank memilih utama (3-4) dan sekunder (flat maks 3)
+    prompt = bangun_prompt_icd(keluhan, rps, disangkal, kw_used, kandidat, objective=obj_str, rpd=rpd)
     try:
         rek, model2 = llm.generate(SYSTEM, prompt, IcdRerankResult)
         # d. Wajib jalankan hasil LLM melewati postprocess() di icd.py sebelum dikembalikan
@@ -472,8 +500,8 @@ def suggest_icd(
         actual_llm = objective
         return suggest_icd(subjective, actual_rows, actual_llm, objective=actual_objective)
 
-    keluhan, rps, disangkal, summary, obj_str = _format_clinical_context(subjective, objective)
-    if not (summary or keluhan or rps or obj_str):
+    keluhan, rps, disangkal, summary, obj_str, rpd = _format_clinical_context(subjective, objective)
+    if not (summary or keluhan or rps or obj_str or rpd):
         return {"utama": [], "sekunder": []}, {}
 
     # a. Buat 1 panggilan LLM untuk mengubah teks subjective (+ objective jika ada)
@@ -481,6 +509,7 @@ def suggest_icd(
     prompt_kw_parts = [
         f"KELUHAN UTAMA: {keluhan or '-'}",
         f"RIWAYAT PENYAKIT SEKARANG: {rps or '-'}",
+        f"RIWAYAT PENYAKIT DAHULU: {rpd or '-'}",
         f"GEJALA DISANGKAL: {', '.join(disangkal) or '-'}",
         f"RANGKUMAN ANAMNESIS: {summary or '-'}",
     ]

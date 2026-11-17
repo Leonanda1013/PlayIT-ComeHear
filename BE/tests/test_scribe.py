@@ -165,14 +165,23 @@ def test_postprocess_four_mandatory_filters(settings):
     assert "INVALID_XYZ" not in utama_codes
     assert not any(c.startswith(("V", "W", "X", "Y")) for c in utama_codes)
 
-    # Cek hasil sekunder:
-    # Grup 1: hanya K29.7 (R10.1 tereliminasi oleh d)
-    grp1_codes = [x["code"] for x in res["sekunder"][0]]
-    assert grp1_codes == ["K29.7"]
+    # Cek hasil sekunder: list datar maks 3 kode
+    # K29.7 disimpan; R10.1 dibuang karena duplikat utama; E11.9 disimpan; E11 dibuang karena ada E11.9
+    sec_codes = [x["code"] for x in res["sekunder"]]
+    assert sec_codes == ["K29.7", "E11.9"]
+    assert len(res["sekunder"]) <= 3
 
-    # Grup 2: hanya E11.9 (K29.7 tereliminasi oleh d, E11 tereliminasi oleh c)
-    grp2_codes = [x["code"] for x in res["sekunder"][1]]
-    assert grp2_codes == ["E11.9"]
+    # Cek pemrosesan sekunder bila diberikan sebagai list datar langsung
+    sekunder_flat = [
+        IcdPick(code="R10.1", deskripsi_id="Duplikat utama", keyakinan=0.75, alasan="duplikat utama"),
+        IcdPick(code="K29.7", deskripsi_id="Gastritis", keyakinan=0.7, alasan="sekunder 1"),
+        IcdPick(code="K29.7", deskripsi_id="Duplikat", keyakinan=0.65, alasan="duplikat"),
+        IcdPick(code="E11", deskripsi_id="Diabetes induk", keyakinan=0.6, alasan="induk"),
+        IcdPick(code="E11.9", deskripsi_id="Diabetes tanpa komplikasi", keyakinan=0.68, alasan="spesifik"),
+    ]
+    res_flat = postprocess(utama_raw, sekunder_flat, rows=rows)
+    assert [x["code"] for x in res_flat["sekunder"]] == ["K29.7", "E11.9"]
+    assert len(res_flat["sekunder"]) <= 3
 
 
 def test_suggest_icd_and_pick_stateless_per_request(settings):

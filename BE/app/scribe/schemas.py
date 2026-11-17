@@ -93,11 +93,11 @@ class IcdPicks(BaseModel):
 class IcdRerankResult(BaseModel):
     utama: list[IcdPick] = Field(
         default_factory=list,
-        description="1-3 usulan kode ICD-10 untuk diagnosis utama terbaik dari daftar kandidat, diurutkan dari yang paling sesuai."
+        description="3-4 usulan kode ICD-10 spesifik (kode turunan) untuk diagnosis utama terbaik dari daftar kandidat, diurutkan dari keyakinan tertinggi."
     )
-    sekunder: list[list[IcdPick]] = Field(
+    sekunder: list[IcdPick] = Field(
         default_factory=list,
-        description="Daftar 0 atau lebih grup diagnosa sekunder yang terindikasi (mis. komorbid/penyakit penyerta), masing-masing 1-3 pilihan kode. Kosongkan [] jika tidak ada indikasi diagnosa sekunder."
+        description="Maksimal 3 usulan kode ICD-10 untuk diagnosis sekunder (komplikasi nyata atau penyakit penyerta/riwayat kronis relevan). Kosongkan [] jika tidak ada indikasi."
     )
 
     @field_validator("sekunder", mode="before")
@@ -108,9 +108,9 @@ class IcdRerankResult(BaseModel):
         out = []
         for item in v:
             if isinstance(item, dict) and "pilihan" in item:
-                out.append(item["pilihan"])
+                out.extend(item["pilihan"] or [])
             elif isinstance(item, list):
-                out.append(item)
+                out.extend(item)
             elif item:
-                out.append([item])
-        return out
+                out.append(item)
+        return out[:3]

@@ -55,7 +55,7 @@ export type ExtractionField = { nilai: string | null; kutipan?: string | null; s
 export type IcdSuggestion = { code: string; display: string; keyakinan?: number; deskripsi_id?: string; alasan?: string }
 export type IcdSuggestionsResult = {
   utama: IcdSuggestion[]
-  sekunder: IcdSuggestion[][]
+  sekunder: IcdSuggestion[]
 }
 export type Diagnosis = { code: string; display: string; rank: number; source?: string }
 

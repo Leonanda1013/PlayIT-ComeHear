@@ -579,19 +579,13 @@ async def save_soap(visit_id: int, request: Request,
     if errors:
         return JSONResponse({"status": "error", "errors": errors, "detail": " ".join(errors)}, status_code=400)
 
-    # Pemicu background rekomendasi ICD-10 saat dokter lanjut dari Subjektif atau Objektif
+    # Pemicu background rekomendasi ICD-10 saat dokter lanjut dari Subjektif
     step = form.get("step")
     if step == "s" or action == "to_oap":
         subj_data = dict(note.subjective or {})
         if note.subjective_summary:
             subj_data["rangkuman_s"] = note.subjective_summary
         pipeline.submit_suggest_icd(SessionLocal, v.id, settings, subjective=subj_data)
-    elif step == "o" or action == "to_ap":
-        subj_data = dict(note.subjective or {})
-        if note.subjective_summary:
-            subj_data["rangkuman_s"] = note.subjective_summary
-        obj_data = note.exam_text or (note.extra.get("objektif") if note.extra else None)
-        pipeline.submit_suggest_icd(SessionLocal, v.id, settings, subjective=subj_data, objective=obj_data)
 
     if action != "approve":
         return {

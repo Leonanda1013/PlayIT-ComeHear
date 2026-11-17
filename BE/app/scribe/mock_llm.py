@@ -85,10 +85,10 @@ def mock_generate(prompt: str, schema):
         ]
         sekunder = []
         if len(cands) > 3:
-            sekunder.append([
+            sekunder = [
                 IcdPick(code=c["code"], deskripsi_id=c.get("display") or c["code"], keyakinan=round(0.6 - n * 0.1, 2),
                         alasan="mock diagnosis sekunder")
                 for n, c in enumerate(cands[3:5])
-            ])
+            ]
         return IcdRerankResult(utama=utama, sekunder=sekunder)
     raise ValueError(f"mock tidak mendukung {schema}")
