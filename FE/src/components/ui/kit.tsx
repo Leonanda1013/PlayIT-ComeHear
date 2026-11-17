@@ -289,7 +289,7 @@ export function Dialog({ open, onClose, title, children, width = 500 }: { open: 
   }, [open, onClose])
   if (!open) return null
   return <div className="fixed inset-0 z-50 grid place-items-center bg-[#081d2d]/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-    <div ref={ref} role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: width }} className="w-full rounded-[16px] border border-[#d3e2e8] bg-white p-6 shadow-[0_20px_50px_rgba(8,29,45,0.18)]">
+    <div ref={ref} role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: width }} className="max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-[16px] border border-[#d3e2e8] bg-white p-6 shadow-[0_20px_50px_rgba(8,29,45,0.18)]">
       <div className="flex items-start justify-between gap-4"><h2 className="text-[20px] font-bold text-ch-ink">{title}</h2><button type="button" aria-label="Tutup" onClick={onClose} className="grid size-8 place-items-center rounded-lg text-ch-muted hover:bg-[#eef4f7]"><X className="size-4" /></button></div>
       <div className="mt-3">{children}</div>
     </div>
