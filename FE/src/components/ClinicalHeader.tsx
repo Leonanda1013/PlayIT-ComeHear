@@ -1,5 +1,6 @@
 import { ArrowLeft, Pencil } from 'lucide-react'
 import { Link } from 'react-router'
+import { subjectiveStagePath } from '@/lib/clinical'
 import { dateId } from '@/lib/format'
 import type { Consultation, Patient } from '@/lib/types'
 
@@ -75,7 +76,7 @@ export function ClinicalHeader({ consultation, stage, patientExtra }: { consulta
           {steps.map((item) => {
             const on = active === item.key
             const to = item.key === 's'
-              ? `/kunjungan/${id}/${(consultation.session || consultation.note.subjective_summary) && consultation.visit.status !== 'manual' ? 'draf-s' : 'subjektif'}`
+              ? `/kunjungan/${id}/${subjectiveStagePath(consultation)}`
               : `/kunjungan/${id}/${item.path}`
             return <Link key={item.key} to={to} aria-current={on ? 'step' : undefined} className={`inline-flex h-8 items-center rounded-full border px-3 text-[11px] font-semibold transition-colors ${on ? 'border-ch-brand bg-ch-brand text-white' : 'border-[#d2e1e7] bg-[#f4f9fb] text-[#5d7285] hover:border-[#8bdbe7]'}`}>{on ? item.long : item.short}</Link>
           })}

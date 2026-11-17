@@ -46,7 +46,7 @@ export function SoapSummary({ note, editBase, aiDraft, variant = 'review' }: { n
 
   return <div className="space-y-5">
     <Panel highlight={aiDraft}>
-      <PanelTitle action={<div className="flex items-center gap-2">{aiDraft && <Badge tone="info" className="py-1">Draf AI</Badge>}{editBase && <EditLink to={`${editBase}/draf-s`} />}</div>}>Subjektif</PanelTitle>
+      <PanelTitle action={<div className="flex items-center gap-2">{aiDraft && <Badge tone="info" className="py-1">Draf AI</Badge>}{editBase && <EditLink to={`${editBase}/${aiDraft ? 'draf-s' : 'subjektif'}`} />}</div>}>Subjektif</PanelTitle>
       <div className="mt-3 space-y-2.5">
         {subjectiveFields.map(([key, label]) => <div key={key}><FieldCaps>{label}</FieldCaps><p className="rounded-[8px] border border-[#d6e3e9] bg-white px-3 py-2 text-xs text-ch-ink">{note.subjective?.[key] || <span className="text-ch-faint">Tidak dibahas.</span>}</p></div>)}
         {note.subjective_summary && <div><FieldCaps>Rangkuman Subjektif</FieldCaps><p className="rounded-[8px] bg-[#eaf6f8] px-3 py-2 text-xs leading-5">{note.subjective_summary}</p></div>}

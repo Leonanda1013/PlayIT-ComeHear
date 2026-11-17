@@ -117,21 +117,32 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
                   <button
                     key={item.code}
                     type="button"
-                    title={item.alasan ? `${item.alasan} (Top ${idx + 1})` : item.display}
+                    disabled={isSelected}
+                    title={
+                      isSelected
+                        ? `${item.code} sudah dipilih sebagai diagnosis utama`
+                        : item.alasan
+                        ? `${item.alasan} (Top ${idx + 1})`
+                        : item.display
+                    }
                     onClick={() => {
-                      patchDx(0, {
+                      if (isSelected) return
+                      const cleanedDx = s.dx.filter((d, i) => i === 0 || d.icd?.code !== item.code)
+                      cleanedDx[0] = {
+                        ...cleanedDx[0],
                         icd: { code: item.code, display: item.display },
-                        text: s.dx[0]?.text || item.deskripsi_id || item.display,
-                      })
+                        text: cleanedDx[0]?.text || item.deskripsi_id || item.display,
+                      }
+                      set('dx', cleanedDx)
                     }}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
                       isSelected
-                        ? 'border-ch-brand bg-ch-brand text-white font-bold'
+                        ? 'border-ch-brand bg-ch-brand text-white font-bold cursor-default'
                         : 'border-[#9ddce5] bg-white text-[#174b55] hover:border-ch-brand hover:bg-[#eaf7f9]'
                     }`}
                   >
                     <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-semibold ${isSelected ? 'bg-white/20 text-white' : 'bg-[#e0f3f6] text-ch-teal'}`}>
-                      Top {idx + 1}
+                      {isSelected ? '✓ Terpilih' : `Top ${idx + 1}`}
                     </span>
                     <b>{item.code}</b>
                     <span>· {item.deskripsi_id || item.display}</span>
@@ -145,13 +156,26 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
             <div className="flex flex-wrap items-center gap-2 border-t border-[#d4edf2] pt-2">
               <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Maks {sekunderList.length}):</span>
               {sekunderList.map((item, idx) => {
+                const isPrimary = s.dx[0]?.icd?.code === item.code
                 const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)
+                const isAlreadyAdded = isPrimary || isSelected
+
                 return (
                   <button
                     key={item.code}
                     type="button"
-                    title={item.alasan ? `${item.alasan} (Top ${idx + 1})` : item.display}
+                    disabled={isAlreadyAdded}
+                    title={
+                      isPrimary
+                        ? `${item.code} sudah dipilih sebagai diagnosis utama`
+                        : isSelected
+                        ? `${item.code} sudah ditambahkan ke diagnosis sekunder`
+                        : item.alasan
+                        ? `${item.alasan} (Top ${idx + 1})`
+                        : item.display
+                    }
                     onClick={() => {
+                      if (isAlreadyAdded) return
                       const emptySecIdx = s.dx.findIndex((d, i) => i > 0 && !d.icd)
                       if (emptySecIdx > 0) {
                         patchDx(emptySecIdx, {
@@ -171,12 +195,20 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
                     }}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
                       isSelected
-                        ? 'border-[#2d8d87] bg-[#2d8d87] text-white font-bold'
+                        ? 'border-[#2d8d87] bg-[#2d8d87] text-white font-bold cursor-default'
+                        : isPrimary
+                        ? 'border-[#cfdbe2] bg-[#f0f4f7] text-[#71859a] cursor-not-allowed'
                         : 'border-[#b6e4ea] bg-white text-[#1f5c66] hover:border-ch-brand hover:bg-[#eef8fa]'
                     }`}
                   >
-                    <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-semibold ${isSelected ? 'bg-white/20 text-white' : 'bg-[#e1f3f5] text-[#246d68]'}`}>
-                      Top {idx + 1}
+                    <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-semibold ${
+                      isSelected
+                        ? 'bg-white/20 text-white'
+                        : isPrimary
+                        ? 'bg-[#e2eaf0] text-[#71859a]'
+                        : 'bg-[#e1f3f5] text-[#246d68]'
+                    }`}>
+                      {isSelected ? '✓ Terpilih' : isPrimary ? 'Utama' : `Top ${idx + 1}`}
                     </span>
                     <b>{item.code}</b>
                     <span>· {item.deskripsi_id || item.display}</span>

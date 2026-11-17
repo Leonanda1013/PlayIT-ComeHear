@@ -5,7 +5,7 @@ import { AlertCircle, ShieldCheck } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { SoapSummary } from '@/components/SoapSummary'
 import { btn, Notice } from '@/components/ui/kit'
-import { saveSoap } from '@/lib/clinical'
+import { isManualSubjective, saveSoap } from '@/lib/clinical'
 import { applyFinish, QUEUE_KEY } from '@/lib/queue'
 import type { Consultation, QueueResponse } from '@/lib/types'
 
@@ -50,7 +50,7 @@ export function ReviewPage({ data }: { data: Consultation }) {
     {notice && <Notice>{notice}</Notice>}
     {warnings.length > 0 && <div role="alert" className="rounded-[12px] border border-[#f0d08a] bg-ch-warn-soft p-4 text-sm text-[#6b4f00]"><p className="flex items-center gap-2 font-semibold"><AlertCircle className="size-4" /> Lengkapi sebelum validasi</p><ul className="mt-2 list-inside list-disc text-[13px]">{warnings.map((item) => <li key={item}>{item}</li>)}</ul></div>}
 
-    <SoapSummary note={note} editBase={`/kunjungan/${id}`} aiDraft={!!data.session} />
+    <SoapSummary note={note} editBase={`/kunjungan/${id}`} aiDraft={!isManualSubjective(data)} />
 
     <section className="rounded-[16px] border border-[#a3dfea] bg-[#e6f6f8] p-5">
       <label className="flex cursor-pointer items-start gap-3 text-[13px] leading-6 text-ch-ink"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1 size-4 accent-ch-brand" /><span>Saya telah memeriksa identitas pasien, draf Subjektif dari AI, diagnosis, dan seluruh SOAP. Saya bertanggung jawab atas isi klinis yang disimpan.</span></label>
