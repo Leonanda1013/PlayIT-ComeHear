@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, ChevronRight, Pencil, RefreshCw, Send, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Pencil, RefreshCw, Send, ShieldAlert } from 'lucide-react'
 import { Link } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -38,6 +38,7 @@ export function SatusehatPage({ user, onLogout }: SessionProps) {
   const queryClient = useQueryClient()
   const [status, setStatus] = useState('')
   const [target, setTarget] = useState<SatusehatRow | null>(null)
+  const [expandedRowId, setExpandedRowId] = useState<number | null>(null)
   const [editingPatient, setEditingPatient] = useState<{ patient: Patient; subId: number } | null>(null)
   const [correctedSubIds, setCorrectedSubIds] = useState<Set<number>>(() => new Set())
   const [correctionNotice, setCorrectionNotice] = useState<string | null>(null)
@@ -63,46 +64,40 @@ export function SatusehatPage({ user, onLogout }: SessionProps) {
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-[16px] font-bold">Daftar Pengiriman</h2><p className="text-[11px] text-ch-muted">Diperbarui {timeWib(sync.data?.updated_at)} · menampilkan {rows.length} dari {all.length}</p></div><div className="w-56"><SelectInput aria-label="Filter status" value={status} onChange={(e) => setStatus(e.target.value)} className="text-[13px]"><option value="">Semua status</option><option value="SENT">Berhasil Terkirim</option><option value="PROSES">Dalam Proses</option><option value="NEEDS_ATTENTION">Gagal Terkirim</option></SelectInput></div></div>
       {correctionNotice && <div className="mt-3"><Notice tone="ok"><CheckCircle2 className="mr-1.5 inline size-4" />{correctionNotice}</Notice></div>}
       {retry.isSuccess && <div className="mt-3"><Notice>Pengiriman dimasukkan kembali ke antrean kirim.</Notice></div>}
-      <div className="mt-3 overflow-x-auto"><div className="min-w-[1000px]">
-        <div className="grid grid-cols-[1.3fr_100px_1fr_130px_1.9fr_220px] rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]"><span>Pasien</span><span>Tanggal</span><span>Dokter</span><span>Status</span><span>Kendala &amp; Detail Error</span><span className="text-right">Aksi</span></div>
+      <div className="mt-3 overflow-x-auto"><div className="min-w-[1020px]">
+        <div className="grid grid-cols-[1.2fr_95px_1fr_150px_1.8fr_140px] items-center gap-x-5 rounded-[8px] bg-[#e8f0f3] px-3 py-2.5 text-[11px] font-semibold text-[#3f5468]"><span>Pasien</span><span>Tanggal</span><span>Dokter</span><span>Status</span><span>Kendala</span><span className="text-right">Aksi</span></div>
         {sync.isPending ? <LoadingState /> : sync.isError ? <ErrorState message={sync.error.message} onRetry={() => sync.refetch()} /> : rows.length === 0 ? <EmptyState title={all.length ? 'Tidak ada pengiriman dengan status ini' : 'Belum ada pengiriman'} description={all.length ? 'Pilih status lain.' : 'Rekam medis dikirim otomatis setelah dokter memvalidasi SOAP.'} /> : <div className="divide-y divide-[#dde8ec]">
           {rows.map((r) => {
             const meta = submissionMeta(r.status)
             const isCorrected = correctedSubIds.has(r.id)
             const it = issue(r, isCorrected)
             const isIdentity = it.category === 'identitas'
+            const isIhsNotFound = r.status === 'NEEDS_ATTENTION' && (
+              (r.last_error_code || '').toLowerCase().includes('ihs_not_found') ||
+              (r.last_error_text || '').toLowerCase().includes('ihs_not_found') ||
+              ((r.last_error_text || '').toLowerCase().includes('nomor ihs') && (r.last_error_text || '').toLowerCase().includes('nik'))
+            )
             const canRetry = it.retry && r.status !== 'SENT' && !PROCESS.includes(r.status)
+            const isExpanded = expandedRowId === r.id
 
-            return <div key={r.id} className="grid min-h-[58px] grid-cols-[1.3fr_100px_1fr_130px_1.9fr_220px] items-center px-3 py-2.5 text-[12px]">
+            return <div key={r.id}>
+              <div className="grid min-h-[58px] grid-cols-[1.2fr_95px_1fr_150px_1.8fr_140px] items-center gap-x-5 px-3 py-2.5 text-[12px]">
               <div><p className="text-[13px] font-semibold">{r.patient?.name || '—'}</p><p className="text-[10px] text-ch-muted">RM-{r.patient?.rm_number} · {r.visit_code}</p></div>
               <span>{dateShort(r.visit_date)}</span>
               <span className="text-ch-muted">{r.doctor}</span>
               <span><Badge tone={meta.tone === 'info' ? 'info' : meta.tone}>{meta.label}</Badge></span>
-              <div className="pr-2">
+              <div className="flex flex-col items-start gap-0.5">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <p className="font-semibold text-ch-ink">{it.label}</p>
+                  <p className="font-semibold text-ch-ink">{isIhsNotFound ? 'Nomor IHS pasien belum ditemukan' : it.label}</p>
                   {isIdentity && isCorrected && <Badge tone="ok" className="text-[9px] py-0 px-1.5">Bundle Koreksi Siap</Badge>}
                 </div>
-                <p className="text-[10px] text-ch-muted">{it.action}{r.attempts ? ` · ${r.attempts} percobaan` : ''}</p>
-                {/* Tampilkan detail error SATUSEHAT langsung di daftar sebelum dialog */}
-                {(r.last_error_text || r.last_error_code) && (
-                  <div className="mt-1 rounded-[6px] border border-[#f5c6c6] bg-[#fff5f5] px-2 py-1 text-[11px] text-[#9d2525]">
-                    {r.last_error_code && <span className="mr-1 font-mono font-bold">[{r.last_error_code}]</span>}
-                    <span className="break-words font-mono text-[10.5px]">{r.last_error_text}</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-1.5">
-                {/* Alur koreksi untuk error identitas */}
-                {isIdentity && r.patient && !isCorrected && (
-                  <button
-                    type="button"
-                    onClick={() => setEditingPatient({ patient: r.patient!, subId: r.id })}
-                    className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-[#f0c27b] bg-[#fffbf2] px-2.5 text-[11px] font-semibold text-[#b45309] hover:bg-[#fffae8]"
-                  >
-                    <Pencil className="size-3" /> Koreksi Identitas
+                {isIhsNotFound && r.patient && !isCorrected ? (
+                  <button type="button" onClick={() => setEditingPatient({ patient: r.patient!, subId: r.id })} className="inline-flex items-center gap-1 text-[11px] font-semibold text-ch-teal hover:underline">
+                    Periksa identitas <span aria-hidden="true">→</span>
                   </button>
-                )}
+                ) : <p className="text-[10px] text-ch-muted">{it.action}</p>}
+              </div>
+              <div className="flex items-center justify-end gap-2">
                 {/* Tombol Kirim Ulang: aktif langsung untuk transient, atau setelah koreksi untuk error identitas */}
                 {canRetry && (
                   <button
@@ -113,10 +108,20 @@ export function SatusehatPage({ user, onLogout }: SessionProps) {
                     <Send className="size-3" /> Kirim Ulang
                   </button>
                 )}
-                <Link to={`/rm/riwayat/${r.visit_id}`} className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-ch-teal hover:underline">
-                  Lihat detail <ChevronRight className="size-3.5" />
-                </Link>
+                <button type="button" aria-expanded={isExpanded} aria-controls={`satusehat-detail-${r.id}`} onClick={() => setExpandedRowId(isExpanded ? null : r.id)} className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-semibold text-ch-teal hover:underline">
+                  Lihat detail <ChevronDown className={`size-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                </button>
               </div>
+              </div>
+              {isExpanded && <div id={`satusehat-detail-${r.id}`} className="mx-3 mb-3 rounded-[8px] border border-[#d3e2e8] bg-[#f7fafb] p-3 text-[11px]">
+                <p className="font-semibold text-ch-ink">Detail pengiriman SATUSEHAT</p>
+                <dl className="mt-2 grid gap-2 sm:grid-cols-3">
+                  <div><dt className="text-ch-muted">Kode error</dt><dd className="break-words font-mono text-ch-ink">{r.last_error_code || '—'}</dd></div>
+                  <div><dt className="text-ch-muted">Pesan teknis</dt><dd className="break-words font-mono text-ch-ink">{r.last_error_text || '—'}</dd></div>
+                  <div><dt className="text-ch-muted">Jumlah percobaan</dt><dd className="text-ch-ink">{r.attempts} percobaan</dd></div>
+                </dl>
+                <Link to={`/rm/riwayat/${r.visit_id}`} className="mt-3 inline-flex items-center gap-0.5 font-semibold text-ch-teal hover:underline">Lihat rekam medis <ChevronRight className="size-3.5" /></Link>
+              </div>}
             </div>
           })}
         </div>}
