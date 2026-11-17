@@ -12,9 +12,9 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.config import Settings
-from app.models import AuditLog, ClinicalNote, ScribeSession, utcnow
+from app.models import AuditLog, ClinicalNote, ScribeSession, Visit, utcnow
 from app.scribe import asr
-from app.scribe.extract import extract_subjective, icd_keywords, icd_pick
+from app.scribe.extract import extract_subjective, icd_keywords, icd_pick, suggest_icd
 from app.scribe.icd import icd_table
 from app.scribe.llm import LLM
 from app.scribe.mock_llm import mock_generate
@@ -125,8 +125,8 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
                 keywords = kw_future.result()
             except Exception:
                 log.warning("kata kunci ICD dari transkrip gagal; ulangi dari rangkuman", exc_info=True)
-                keywords = icd_keywords("ANAMNESIS: " + subjective["rangkuman_s"], llm)
-            icd, models["icd"] = icd_pick(subjective["rangkuman_s"], keywords, icd_table(settings), llm)
+                keywords = subjective.get("kata_kunci_icd10_en") or icd_keywords("ANAMNESIS: " + subjective.get("rangkuman_s", ""), llm)
+            icd, models["icd"] = icd_pick(subjective, keywords, icd_table(settings), llm)
             ss.icd_suggestions = icd
             timings["icd_s"] = round(time.perf_counter() - t, 1)
 
@@ -151,6 +151,66 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
 
 def submit(session_factory, session_id: int, settings: Settings, text_transcript: str | None = None):
     return executor.submit(run_session, session_factory, session_id, settings, text_transcript)
+
+
+def run_suggest_icd(
+    session_factory,
+    visit_id: int,
+    settings: Settings,
+    subjective: dict | None = None,
+    objective: dict | str | None = None,
+):
+    llm = LLM(settings, mock=mock_generate)
+    with session_factory() as db:
+        visit = db.get(Visit, visit_id)
+        if not visit:
+            return
+        note = visit.note
+        subj = subjective
+        if not subj and note:
+            subj = dict(note.subjective or {})
+            if note.subjective_summary:
+                subj["rangkuman_s"] = note.subjective_summary
+
+        if not subj or not any(str(v).strip() for v in subj.values() if v is not None):
+            return
+
+        obj = objective
+        if obj is None and note:
+            obj = note.exam_text or (note.extra.get("objektif") if note.extra else None)
+
+        try:
+            icd, models = suggest_icd(subj, icd_table(settings), llm, objective=obj)
+            ss = next((s for s in reversed(visit.scribe_sessions) if s.status not in ("failed", "replaced", "abandoned")), None)
+            if ss:
+                ss.icd_suggestions = icd
+                ss.model_info = {**(ss.model_info or {}), **models}
+            else:
+                ss = ScribeSession(visit_id=visit.id, status="done", icd_suggestions=icd, model_info=models)
+                db.add(ss)
+
+            if note:
+                extra = dict(note.extra or {})
+                extra["icd_suggestions"] = icd
+                note.extra = extra
+
+            db.commit()
+            log.info("Rekomendasi ICD-10 background kunjungan %s selesai.", visit_id)
+        except Exception:
+            log.exception("Gagal menyusun usulan ICD-10 background untuk kunjungan %s", visit_id)
+            db.rollback()
+
+
+def submit_suggest_icd(
+    session_factory,
+    visit_id: int,
+    settings: Settings,
+    subjective: dict | None = None,
+    objective: dict | str | None = None,
+):
+    return llm_pool.submit(
+        run_suggest_icd, session_factory, visit_id, settings, subjective, objective
+    )
 
 
 def warm_up(settings: Settings) -> None:

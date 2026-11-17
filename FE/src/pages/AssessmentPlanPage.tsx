@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Plus, Sparkles, Trash2 } from 'lucide-react'
@@ -7,7 +7,7 @@ import { IcdPicker, type IcdValue } from '@/components/IcdPicker'
 import { KfaPicker } from '@/components/KfaPicker'
 import { btn, Check, FieldCaps, inputClass, Label, Notice, Panel, Radio, SelectInput, TextArea } from '@/components/ui/kit'
 import { saveSoap } from '@/lib/clinical'
-import type { Consultation } from '@/lib/types'
+import type { Consultation, IcdSuggestion, IcdSuggestionsResult } from '@/lib/types'
 
 type Dx = { text: string; icd: IcdValue; onset: 'akut' | 'kronis' }
 type Ingredient = { name: string; dose: string }
@@ -42,7 +42,29 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const suggestions = data.session?.icd_suggestions || []
+
+  const rawSugg = data.session?.icd_suggestions
+  const utamaList: IcdSuggestion[] = Array.isArray(rawSugg)
+    ? rawSugg
+    : (rawSugg && typeof rawSugg === 'object' && Array.isArray((rawSugg as IcdSuggestionsResult).utama))
+    ? (rawSugg as IcdSuggestionsResult).utama
+    : []
+
+  const sekunderGroups: IcdSuggestion[][] = (!Array.isArray(rawSugg) && rawSugg && typeof rawSugg === 'object' && Array.isArray((rawSugg as IcdSuggestionsResult).sekunder))
+    ? (rawSugg as IcdSuggestionsResult).sekunder
+    : []
+
+  const hasSuggestions = utamaList.length > 0 || sekunderGroups.length > 0
+
+  // Polling pembaruan rekomendasi jika rekomendasi background baru saja dipicu dan sedang diproses
+  useEffect(() => {
+    if (hasSuggestions) return
+    const timer = setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: ['consultation', id] })
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [hasSuggestions, id, queryClient])
+
   const set = <K extends keyof ApState>(key: K, value: ApState[K]) => setS((current) => ({ ...current, [key]: value }))
   const patchDx = (index: number, patch: Partial<Dx>) => set('dx', s.dx.map((d, i) => i === index ? { ...d, ...patch } : d))
   const patchRx = (index: number, patch: Partial<Rx>) => set('rx', s.rx.map((r, i) => i === index ? { ...r, ...patch } : r))
@@ -76,7 +98,99 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
 
     <Panel className="p-5 sm:p-6">
       <h2 className="text-[20px] font-bold text-ch-ink">Asesmen</h2>
-      {suggestions.length > 0 && <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[10px] bg-[#eef8fa] p-2.5 text-xs"><span className="flex items-center gap-1 font-semibold text-ch-teal"><Sparkles className="size-3.5" /> Usulan AI dari anamnesis:</span>{suggestions.map((item) => <button key={item.code} type="button" title={item.alasan} onClick={() => { const empty = s.dx.findIndex((d) => !d.icd); if (empty >= 0) patchDx(empty, { icd: { code: item.code, display: item.display }, text: s.dx[empty].text || item.deskripsi_id || item.display }); else set('dx', [...s.dx, { text: item.deskripsi_id || item.display, icd: { code: item.code, display: item.display }, onset: 'akut' }]) }} className="rounded-full border border-[#9ddce5] bg-white px-2.5 py-1 text-[11px] text-[#174b55] hover:border-ch-brand"><b>{item.code}</b> · {item.deskripsi_id || item.display}</button>)}<span className="text-[11px] text-ch-muted">Klik untuk memakai, dokter tetap memutuskan.</span></div>}
+      {hasSuggestions && (
+        <div className="mt-3 space-y-3 rounded-[12px] border border-[#a8dfe7] bg-[#f2fafc] p-3.5 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 font-bold text-ch-teal">
+              <Sparkles className="size-4 text-ch-brand" /> Usulan Kode ICD-10 (Rekomendasi AI)
+            </span>
+            <span className="text-[11px] text-ch-muted">Klik usulan untuk mengisi asesmen; dokter tetap memeriksa &amp; memutuskan.</span>
+          </div>
+
+          {utamaList.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <span className="font-semibold text-[#1f4e5b]">Diagnosis Utama (Top {utamaList.length}):</span>
+              {utamaList.map((item) => {
+                const confPercent = item.keyakinan ? Math.round(item.keyakinan * 100) : null
+                const isSelected = s.dx[0]?.icd?.code === item.code
+                return (
+                  <button
+                    key={item.code}
+                    type="button"
+                    title={item.alasan ? `${item.alasan}${confPercent ? ` (${confPercent}%)` : ''}` : item.display}
+                    onClick={() => {
+                      patchDx(0, {
+                        icd: { code: item.code, display: item.display },
+                        text: s.dx[0]?.text || item.deskripsi_id || item.display,
+                      })
+                    }}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
+                      isSelected
+                        ? 'border-ch-brand bg-ch-brand text-white font-bold'
+                        : 'border-[#9ddce5] bg-white text-[#174b55] hover:border-ch-brand hover:bg-[#eaf7f9]'
+                    }`}
+                  >
+                    <b>{item.code}</b>
+                    <span>· {item.deskripsi_id || item.display}</span>
+                    {confPercent && <span className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-ch-teal'}`}>({confPercent}%)</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {sekunderGroups.length > 0 && (
+            <div className="space-y-2 border-t border-[#d4edf2] pt-2">
+              <span className="font-semibold text-[#1f4e5b] block">Diagnosis Sekunder / Komorbid Terindikasi:</span>
+              <div className="space-y-2">
+                {sekunderGroups.map((group, grpIdx) => (
+                  <div key={grpIdx} className="flex flex-wrap items-center gap-2 pl-2 border-l-2 border-[#b5e4ec]">
+                    <span className="text-[11px] font-medium text-ch-muted">Grup {grpIdx + 1}:</span>
+                    {group.map((item) => {
+                      const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)
+                      const confPercent = item.keyakinan ? Math.round(item.keyakinan * 100) : null
+                      return (
+                        <button
+                          key={item.code}
+                          type="button"
+                          title={item.alasan ? `${item.alasan}${confPercent ? ` (${confPercent}%)` : ''}` : item.display}
+                          onClick={() => {
+                            const emptySecIdx = s.dx.findIndex((d, i) => i > 0 && !d.icd)
+                            if (emptySecIdx > 0) {
+                              patchDx(emptySecIdx, {
+                                icd: { code: item.code, display: item.display },
+                                text: s.dx[emptySecIdx].text || item.deskripsi_id || item.display,
+                              })
+                            } else {
+                              set('dx', [
+                                ...s.dx,
+                                {
+                                  text: item.deskripsi_id || item.display,
+                                  icd: { code: item.code, display: item.display },
+                                  onset: 'akut',
+                                },
+                              ])
+                            }
+                          }}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] transition-colors shadow-2xs ${
+                            isSelected
+                              ? 'border-[#2d8d87] bg-[#2d8d87] text-white font-bold'
+                              : 'border-[#b6e4ea] bg-white text-[#1f5c66] hover:border-ch-brand hover:bg-[#eef8fa]'
+                          }`}
+                        >
+                          <b>{item.code}</b>
+                          <span>· {item.deskripsi_id || item.display}</span>
+                          {confPercent && <span className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-ch-teal'}`}>({confPercent}%)</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <div className="mt-3 divide-y divide-[#e3ecf0]">
         {s.dx.map((d, index) => {
           const label = index === 0 ? 'UTAMA' : `SEKUNDER ${index}`

@@ -507,15 +507,15 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
             "approved_snapshot": note.approved_snapshot
         },
         "session": {
-            "id": ss.id,
-            "status": ss.status,
-            "transcript": ss.transcript or [],
-            "extraction": ss.extraction,
-            "icd_suggestions": ss.icd_suggestions,
-            "timings": ss.timings,
-            "error": ss.error,
-            "has_audio": bool(ss.audio_path and not ss.audio_deleted_at and Path(ss.audio_path).exists())
-        } if ss else None,
+            "id": ss.id if ss else 0,
+            "status": ss.status if ss else "done",
+            "transcript": ss.transcript if ss else [],
+            "extraction": ss.extraction if ss else None,
+            "icd_suggestions": (ss.icd_suggestions if (ss and ss.icd_suggestions) else (note.extra.get("icd_suggestions") if note.extra else None)),
+            "timings": ss.timings if ss else None,
+            "error": ss.error if ss else None,
+            "has_audio": bool(ss.audio_path and not ss.audio_deleted_at and Path(ss.audio_path).exists()) if ss else False
+        } if (ss or (note.extra and note.extra.get("icd_suggestions"))) else None,
         "failed_session": {
             "id": failed.id,
             "error": failed.error
@@ -578,7 +578,21 @@ async def save_soap(visit_id: int, request: Request,
 
     if errors:
         return JSONResponse({"status": "error", "errors": errors, "detail": " ".join(errors)}, status_code=400)
-    
+
+    # Pemicu background rekomendasi ICD-10 saat dokter lanjut dari Subjektif atau Objektif
+    step = form.get("step")
+    if step == "s" or action == "to_oap":
+        subj_data = dict(note.subjective or {})
+        if note.subjective_summary:
+            subj_data["rangkuman_s"] = note.subjective_summary
+        pipeline.submit_suggest_icd(SessionLocal, v.id, settings, subjective=subj_data)
+    elif step == "o" or action == "to_ap":
+        subj_data = dict(note.subjective or {})
+        if note.subjective_summary:
+            subj_data["rangkuman_s"] = note.subjective_summary
+        obj_data = note.exam_text or (note.extra.get("objektif") if note.extra else None)
+        pipeline.submit_suggest_icd(SessionLocal, v.id, settings, subjective=subj_data, objective=obj_data)
+
     if action != "approve":
         return {
             "status": "ok",
@@ -854,8 +868,25 @@ def scribe_state(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clini
         "summary": v.note.subjective_summary if v.note and ss and ss.extraction else None,
         "fields": dict(v.note.subjective or {}) if v.note and ss and ss.extraction else None,
         "duration_s": (ss.model_info or {}).get("duration_s") if ss else None,
-        "icd": ss.icd_suggestions if ss and ss.status == "done" else None,
+        "icd": (ss.icd_suggestions if (ss and ss.status == "done" and ss.icd_suggestions)
+                else (v.note.extra.get("icd_suggestions") if v.note and v.note.extra else None)),
     }
+
+
+@app.post("/visits/{visit_id}/suggest-icd")
+async def trigger_icd(visit_id: int, request: Request,
+                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                      db: Session = Depends(get_db)):
+    """Pemicu background untuk menyusun/memperbarui rekomendasi ICD-10."""
+    v = get_visit(db, visit_id)
+    note = _ensure_note(db, v)
+    body = await _body(request)
+    subj = body.get("subjective") or dict(note.subjective or {})
+    if note.subjective_summary and "rangkuman_s" not in subj:
+        subj["rangkuman_s"] = note.subjective_summary
+    obj = body.get("objective") or note.exam_text or (note.extra.get("objektif") if note.extra else None)
+    pipeline.submit_suggest_icd(SessionLocal, v.id, settings, subjective=subj, objective=obj)
+    return {"status": "ok", "message": "Penyusunan usulan ICD-10 berjalan di background."}
 
 
 @app.get("/api/icd")
@@ -1007,7 +1038,11 @@ def _record_edits(db: Session, v: Visit, user: User):
     final = v.note.approved_snapshot
     pairs = [(k, ss.extraction[k]["nilai"], final["subjective"].get(k)) for k in SUBJECTIVE_FIELDS]
     pairs.append(("rangkuman_s", ss.extraction.get("rangkuman_s"), final["subjective_summary"]))
-    ai_codes = [c["code"] for c in ss.icd_suggestions or []]
+    raw_icd = ss.icd_suggestions or []
+    if isinstance(raw_icd, dict):
+        ai_codes = [c["code"] for c in raw_icd.get("utama", []) if isinstance(c, dict) and "code" in c]
+    else:
+        ai_codes = [c["code"] for c in raw_icd if isinstance(c, dict) and "code" in c]
     pairs.append(("icd_primer", ai_codes[0] if ai_codes else None,
                   final["diagnoses"][0]["code"] if final["diagnoses"] else None))
     for key, ai, fin in pairs:

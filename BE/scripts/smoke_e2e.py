@@ -65,7 +65,8 @@ def main():
 
         consult_s = c.get(f"/visits/{vid}/s").json()
         assert consult_s["status"] == "ok"
-        code = st["icd"][0]["code"]
+        icd_data = st["icd"]
+        code = icd_data["utama"][0]["code"] if isinstance(icd_data, dict) else icd_data[0]["code"]
 
         r = c.post(f"/visits/{vid}/soap", data={
             "step": "oap", "action": "to_verify", "suhu": "36,8", "tensi": "120/80", "spo2": "98", "bb": "65",
@@ -108,8 +109,9 @@ def main():
         assert c.get("/riwayat").status_code == 200
         assert c.get("/pendaftaran").status_code == 200
 
+        icd_codes = [c['code'] for c in (st['icd']['utama'] if isinstance(st['icd'], dict) else st['icd'])]
         print(f"OK: kunjungan {vid} terkirim (SATUSEHAT_MODE={settings.satusehat_mode}, "
-              f"LLM={settings.llm_providers}), ICD usulan {[c['code'] for c in st['icd']]}")
+              f"LLM={settings.llm_providers}), ICD usulan {icd_codes}")
 
 
 if __name__ == "__main__":

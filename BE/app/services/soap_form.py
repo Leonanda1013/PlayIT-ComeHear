@@ -83,7 +83,14 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
 
     # --- A ---
     if "dx_primary" in form:
-        ai_codes = {c["code"] for c in (visit.latest_session.icd_suggestions or [])} if visit.latest_session else set()
+        raw_sugg = visit.latest_session.icd_suggestions if visit.latest_session else None
+        if isinstance(raw_sugg, dict):
+            ai_codes = {c["code"] for c in raw_sugg.get("utama", []) if isinstance(c, dict) and "code" in c}
+            for grp in raw_sugg.get("sekunder", []):
+                items = grp if isinstance(grp, list) else [grp]
+                ai_codes.update(c["code"] for c in items if isinstance(c, dict) and "code" in c)
+        else:
+            ai_codes = {c["code"] for c in (raw_sugg or []) if isinstance(c, dict) and "code" in c}
         codes = parse_codes(form.get("dx_primary"))[:1] + parse_codes(form.get("dx_secondary"))
         diagnoses, seen = [], set()
         for c in codes:

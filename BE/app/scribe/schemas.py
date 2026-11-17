@@ -7,8 +7,9 @@ Perbaikan dari eksplorasi Nisa:
 - pertinent negatives (gejala yang disangkal) dicatat terpisah.
 """
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SUBJECTIVE_FIELDS = {
     "keluhan_utama": "Keluhan utama",
@@ -87,3 +88,29 @@ class IcdPick(BaseModel):
 
 class IcdPicks(BaseModel):
     picks: list[IcdPick]
+
+
+class IcdRerankResult(BaseModel):
+    utama: list[IcdPick] = Field(
+        default_factory=list,
+        description="1-3 usulan kode ICD-10 untuk diagnosis utama terbaik dari daftar kandidat, diurutkan dari yang paling sesuai."
+    )
+    sekunder: list[list[IcdPick]] = Field(
+        default_factory=list,
+        description="Daftar 0 atau lebih grup diagnosa sekunder yang terindikasi (mis. komorbid/penyakit penyerta), masing-masing 1-3 pilihan kode. Kosongkan [] jika tidak ada indikasi diagnosa sekunder."
+    )
+
+    @field_validator("sekunder", mode="before")
+    @classmethod
+    def norm_sekunder(cls, v: Any):
+        if not isinstance(v, list):
+            return []
+        out = []
+        for item in v:
+            if isinstance(item, dict) and "pilihan" in item:
+                out.append(item["pilihan"])
+            elif isinstance(item, list):
+                out.append(item)
+            elif item:
+                out.append([item])
+        return out

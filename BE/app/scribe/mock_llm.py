@@ -2,7 +2,7 @@
 import json
 import re
 
-from app.scribe.schemas import (ExtractionWithSpeakers, FieldStatus, IcdKeywords, IcdPick, IcdPicks, SpeakerLabel, SpeakerLabels,
+from app.scribe.schemas import (ExtractionWithSpeakers, FieldStatus, IcdKeywords, IcdPick, IcdPicks, IcdRerankResult, SpeakerLabel, SpeakerLabels,
                                 SubjectiveExtraction, SubjectiveField)
 
 _LINE = re.compile(r"^\[(\d+)\] ([^:]+): (.*)$")
@@ -62,4 +62,33 @@ def mock_generate(prompt: str, schema):
         cands = json.loads(prompt.split("KANDIDAT:\n", 1)[1])
         return IcdPicks(picks=[IcdPick(code=c["code"], deskripsi_id=c["display"], keyakinan=0.5 - n * 0.1,
                                        alasan="mock") for n, c in enumerate(cands[:3])])
+    if schema is IcdRerankResult:
+        cands = []
+        if "KANDIDAT (KODE | NAMA):\n" in prompt:
+            cand_text = prompt.split("KANDIDAT (KODE | NAMA):\n", 1)[1]
+            for line in cand_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if "|" in line:
+                    parts = line.split("|", 1)
+                    cands.append({"code": parts[0].strip(), "display": parts[1].strip()})
+        elif "KANDIDAT:\n" in prompt:
+            try:
+                cands = json.loads(prompt.split("KANDIDAT:\n", 1)[1])
+            except Exception:
+                pass
+        utama = [
+            IcdPick(code=c["code"], deskripsi_id=c.get("display") or c["code"], keyakinan=round(0.8 - n * 0.1, 2),
+                    alasan="mock diagnosis utama")
+            for n, c in enumerate(cands[:3])
+        ]
+        sekunder = []
+        if len(cands) > 3:
+            sekunder.append([
+                IcdPick(code=c["code"], deskripsi_id=c.get("display") or c["code"], keyakinan=round(0.6 - n * 0.1, 2),
+                        alasan="mock diagnosis sekunder")
+                for n, c in enumerate(cands[3:5])
+            ])
+        return IcdRerankResult(utama=utama, sekunder=sekunder)
     raise ValueError(f"mock tidak mendukung {schema}")

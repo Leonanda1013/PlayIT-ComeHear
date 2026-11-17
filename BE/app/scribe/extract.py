@@ -11,11 +11,11 @@ import difflib
 import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.scribe.icd import IcdRow, IndeksICD10, JUMLAH_KANDIDAT, _indeks_dari_rows, get_icd_index, postprocess, retrieve
+from app.scribe.icd import IcdRow, IndeksICD10, JUMLAH_KANDIDAT, _indeks_dari_rows, expand_keywords, get_icd_index, postprocess, retrieve
 from app.scribe.llm import LLM
 from app.scribe.schemas import (
     SUBJECTIVE_FIELDS,
@@ -24,6 +24,7 @@ from app.scribe.schemas import (
     IcdKeywords,
     IcdPick,
     IcdPicks,
+    IcdRerankResult,
     SpeakerLabel,
     SpeakerLabels,
     SubjectiveExtraction,
@@ -65,12 +66,6 @@ class ExtractionWithSpeakersV3(SubjectiveExtractionV3):
     """Label pembicara + anamnesis S + kata kunci ICD dalam satu panggilan."""
     pembicara: list[SpeakerLabel] = Field(
         description="Label pembicara untuk SETIAP indeks segmen [i]: doctor, patient, guardian"
-    )
-
-
-class IcdRerankResult(BaseModel):
-    usulan: list[IcdPick] = Field(
-        description="Maksimal 3 usulan kode ICD-10 terbaik dari daftar kandidat, diurutkan dari yang paling sesuai."
     )
 
 
@@ -160,7 +155,7 @@ def bangun_prompt_s(segmen_aman: list[dict], butuh_pembicara: bool) -> str:
         "3. Pasien ragu ('kayaknya', 'lupa', 'mungkin', 'setahu saya', 'nggak yakin') -> status ambigu dan isi "
         "alasan_ambigu. Onset/durasi yang saling bertentangan tanpa dikoreksi pasien juga ambigu.\n"
         "4. Disebut eksplisit dan jelas -> status jelas.\n"
-        "5. Tulis nilai dalam bahasa Indonesia baku; terjemahkan bahasa daerah. Tulis angka dalam digit beserta "
+        "5. Tulis nilai dalam bahasa Indonesia baku; terjemahkan bahasa daerah (misal bahasa Jawa: 'sumer' -> 'demam', 'mules' -> 'nyeri perut', 'ngelu' -> 'sakit kepala', 'pilek/umbelen' -> 'pilek', 'mutah' -> 'muntah', 'mencret' -> 'diare'). Tulis angka dalam digit beserta "
         "satuan ('tiga puluh delapan koma lima' -> 38,5 °C; 'lima ratus mili' -> 500 mg). Sertakan durasi, "
         "dosis, dan frekuensi bila disebut. Waktu relatif ('kemarin', 'hari Senin') tulis apa adanya; jangan "
         "diubah menjadi tanggal. Bila pasien mengoreksi dirinya ('sebenarnya...'), pakai versi koreksi di "
@@ -209,19 +204,34 @@ def bangun_prompt_s(segmen_aman: list[dict], butuh_pembicara: bool) -> str:
         f"TRANSKRIP:\n{render_transcript(segmen_aman)}")
 
 
-def bangun_prompt_icd(keluhan: str, rps: str, disangkal: list[str], keywords: list[str], kandidat: list[tuple[str, str]]) -> str:
+def bangun_prompt_icd(
+    keluhan: str,
+    rps: str,
+    disangkal: list[str],
+    keywords: list[str],
+    kandidat: list[tuple[str, str]],
+    objective: Optional[str] = None,
+) -> str:
+    obj_section = f"PEMERIKSAAN OBJEKTIF / FISIK:\n{objective}\n\n" if objective else ""
     return (
-        "Pilih maksimal 3 kode ICD-10 sebagai USULAN AWAL untuk dokter, HANYA dari daftar KANDIDAT (salin kode "
-        "persis). Dasarnya hanya anamnesis (belum ada pemeriksaan fisik/lab), jadi kode gejala (bab R) boleh "
-        "dipilih bila penyakit belum bisa dipastikan.\n"
-        "Pilih berdasarkan KELUHAN SAAT INI (keluhan utama dan gejala penyerta yang ada). JANGAN memilih kode "
-        "yang dasarnya riwayat alergi, penyakit dahulu, atau pengobatan, dan JANGAN memilih kode untuk gejala "
-        "yang disangkal. Pilih kode paling spesifik; jangan memilih kode induk sekaligus turunannya.\n"
-        "keyakinan 0.0-1.0: di atas 0.7 hanya bila anamnesis kuat mendukung; satu gejala tidak spesifik "
-        "maksimal 0.5. Urutkan dari paling sesuai.\n\n"
-        f"KELUHAN UTAMA: {keluhan or '-'}\nRIWAYAT PENYAKIT SEKARANG: {rps or '-'}\n"
-        f"GEJALA DISANGKAL: {', '.join(disangkal) or '-'}\nKATA KUNCI: {', '.join(keywords)}\n\n"
-        "KANDIDAT (KODE | NAMA):\n" + "\n".join(f"{k} | {d}" for k, d in kandidat))
+        "Pilih kode ICD-10 sebagai USULAN untuk dokter, HANYA dari daftar KANDIDAT di bawah (salin kode persis).\n"
+        "Bagi keluaran menjadi dua kategori terpisah:\n"
+        "1. `utama`: 1-3 pilihan kode ICD-10 terbaik untuk Diagnosis Utama (keluhan utama/kondisi primer saat ini), diurutkan dari keyakinan tertinggi.\n"
+        "2. `sekunder`: list berisi 0 atau lebih grup diagnosis sekunder (komorbid, penyakit penyerta, atau gejala sekunder yang membutuhkan penanganan terpisah). Setiap grup berisi 1-3 pilihan kode ICD-10. Jika tidak ada indikasi diagnosis sekunder, kembalikan list kosong [].\n\n"
+        "Aturan Pemilihan:\n"
+        "- Dasarkan pada keluhan saat ini dan data objektif/fisik (bila ada).\n"
+        "- JANGAN memilih kode yang dasarnya riwayat alergi lama atau penyakit masa lalu yang sudah sembuh, dan JANGAN memilih kode untuk gejala yang disangkal.\n"
+        "- Pilih kode paling spesifik; jangan memilih kode induk (mis. R10) sekaligus turunannya (mis. R10.1) dalam grup yang sama.\n"
+        "- Hindari kode penyebab eksternal (awalan V, W, X, Y).\n"
+        "- `keyakinan` (0.0 - 1.0): berikan perkiraan keyakinan klinis yang realistis (>= 0.7 bila gejala/tanda kuat mendukung, 0.3 - 0.5 bila masih dugaan awal/gejala non-spesifik).\n"
+        "- `alasan`: sertakan alasan singkat berdasarkan anamnesis/pemeriksaan.\n\n"
+        f"KELUHAN UTAMA: {keluhan or '-'}\n"
+        f"RIWAYAT PENYAKIT SEKARANG: {rps or '-'}\n"
+        f"GEJALA DISANGKAL: {', '.join(disangkal) or '-'}\n"
+        f"{obj_section}"
+        f"KATA KUNCI: {', '.join(keywords)}\n\n"
+        "KANDIDAT (KODE | NAMA):\n" + "\n".join(f"{k} | {d}" for k, d in kandidat)
+    )
 
 
 # =====================================================================
@@ -283,7 +293,6 @@ def ground(data: dict | BaseModel, segmen: list[dict], peringatan: Optional[list
 # =====================================================================
 # INTEGRASI PIPELINE BACKEND
 # =====================================================================
-_LAST_EXTRACTION: dict[str, dict] = {}
 
 
 def label_speakers(segments: list[dict], llm: LLM) -> tuple[list[dict], str | None]:
@@ -334,111 +343,158 @@ def extract_subjective(segments: list[dict], llm: LLM,
     data.pop("pembicara", None)
     keywords = data.pop("kata_kunci_icd10_en", None) or []
     data = ground(data, aman)
-
-    # Cache konteks ekstraksi untuk menghindari pemanggilan LLM berulang pada icd_keywords & icd_pick
-    ctx = {
-        "keluhan": (data.get("keluhan_utama", {}).get("nilai") or "").strip(),
-        "rps": (data.get("riwayat_penyakit_sekarang", {}).get("nilai") or "").strip(),
-        "disangkal": list(data.get("gejala_disangkal") or []),
-        "keywords": list(keywords),
-    }
-    _LAST_EXTRACTION[data["rangkuman_s"]] = ctx
-    _LAST_EXTRACTION["__latest__"] = ctx
+    data["kata_kunci_icd10_en"] = keywords
     return data, model
 
 
 def icd_keywords(text: str, llm: LLM) -> list[str]:
-    """Kata kunci ICD. Mengambil dari cache extract_subjective bila dipanggil paralel dari pipeline."""
+    """Ubah teks klinis menjadi 5-10 istilah medis Inggris standar ICD-10."""
+    clean = text.removeprefix("ANAMNESIS:").strip()
+    if not clean:
+        return []
     pakai_mock_murni = not getattr(llm, "providers", None) and getattr(llm, "use_mock", False)
     if pakai_mock_murni:
-        kw, _ = llm.generate(SYSTEM, text, IcdKeywords)
+        kw, _ = llm.generate(SYSTEM, clean, IcdKeywords)
         return kw.english_keywords
 
-    clean = text.removeprefix("ANAMNESIS:").strip()
-    if clean in _LAST_EXTRACTION and _LAST_EXTRACTION[clean].get("keywords"):
-        return list(_LAST_EXTRACTION[clean]["keywords"])
-    if not text.startswith("ANAMNESIS:"):
-        # Dipanggil paralel dengan extract_subjective pada pipeline; biarkan extract_subjective
-        # yang menyediakan keywords agar kuota API tidak terbuang.
+    prompt = (
+        "Ubah data klinis pasien berikut menjadi 5-10 istilah medis Inggris standar ICD-10 untuk keluhan SAAT INI "
+        "(gejala dan dugaan penyakit yang ADA, misal 'fever', 'dengue fever', 'headache'). Abaikan gejala yang disangkal.\n\n"
+        + clean
+    )
+    try:
+        kw, _ = llm.generate(SYSTEM, prompt, IcdKeywords)
+        return kw.english_keywords
+    except Exception as e:
+        log.warning("Gagal ekstraksi kata kunci ICD: %s", e)
         return []
 
-    kw, _ = llm.generate(SYSTEM, (
-        "Ubah keluhan pasien berikut menjadi 5-10 istilah medis Inggris dasar untuk keluhan SAAT INI "
-        "(keluhan utama dan gejala penyerta yang ADA). Abaikan gejala yang disangkal.\n\n" + text
-    ), IcdKeywords)
-    return kw.english_keywords
+
+def _format_clinical_context(
+    subjective: dict | str, objective: Optional[dict | str] = None
+) -> tuple[str, str, list[str], str, str]:
+    """Ekstraksi teks keluhan, rps, disangkal, rangkuman, dan data objektif secara stateless."""
+    if isinstance(subjective, str):
+        keluhan = subjective.strip()
+        rps = ""
+        disangkal = []
+        summary = subjective.strip()
+    elif isinstance(subjective, dict):
+        summary = (subjective.get("rangkuman_s") or "").strip()
+        ku = subjective.get("keluhan_utama")
+        keluhan = (ku.get("nilai") if isinstance(ku, dict) else str(ku or "")).strip()
+        r = subjective.get("riwayat_penyakit_sekarang")
+        rps = (r.get("nilai") if isinstance(r, dict) else str(r or "")).strip()
+        disangkal = list(subjective.get("gejala_disangkal") or [])
+        if not summary:
+            parts = [f"Keluhan: {keluhan}" if keluhan else "", f"RPS: {rps}" if rps else ""]
+            summary = "; ".join(p for p in parts if p)
+    else:
+        keluhan, rps, disangkal, summary = "", "", [], ""
+
+    obj_str = ""
+    if isinstance(objective, dict):
+        lines = []
+        for k, v in objective.items():
+            if v and str(v).strip():
+                label = k.replace("_", " ").title()
+                lines.append(f"- {label}: {str(v).strip()}")
+        obj_str = "\n".join(lines)
+    elif isinstance(objective, str):
+        obj_str = objective.strip()
+
+    return keluhan, rps, disangkal, summary, obj_str
 
 
-def icd_pick(summary: str, keywords: list[str], rows: tuple[IcdRow, ...], llm: LLM) -> tuple[list[dict], dict]:
-    """Pencarian kandidat ICD-10 lokal + reranking top-3 oleh LLM."""
-    ctx = _LAST_EXTRACTION.get(summary) or _LAST_EXTRACTION.get("__latest__") or {}
-    kw_extracted = ctx.get("keywords") or []
-    kw_used = list(dict.fromkeys([*kw_extracted, *(keywords or [])]))
-    keluhan = (ctx.get("keluhan") or "").strip()
-    rps = (ctx.get("rps") or "").strip()
-    disangkal = list(ctx.get("disangkal") or [])
+def icd_pick(
+    subjective: dict | str,
+    keywords: list[str],
+    rows: tuple[IcdRow, ...],
+    llm: LLM,
+    objective: Optional[dict | str] = None,
+) -> tuple[dict, dict]:
+    """Pencarian maksimal 50 kandidat ICD-10 lokal + reranking top utama & sekunder oleh LLM + postprocessing."""
+    keluhan, rps, disangkal, summary, obj_str = _format_clinical_context(subjective, objective)
 
-    if not keluhan and not rps:
-        keluhan = (summary or "").strip()
+    # Kata kunci yang digunakan: gabungan keywords + kata_kunci_icd10_en jika ada di subjective
+    kw_sub = subjective.get("kata_kunci_icd10_en") if isinstance(subjective, dict) else []
+    kw_used = list(dict.fromkeys([*(kw_sub or []), *(keywords or [])]))
 
-    pakai_mock_murni = not getattr(llm, "providers", None) and getattr(llm, "use_mock", False)
-    if pakai_mock_murni:
-        candidates = retrieve(rows, kw_used or ["fever"])
-        if not candidates or not summary.strip():
-            return [], {"keywords": kw_used, "candidates": len(candidates)}
-        cand_json = json.dumps([{"code": r.code, "display": r.display} for r in candidates], ensure_ascii=False)
-        picks, _ = llm.generate(SYSTEM, f"ANAMNESIS: {summary}\n\nKANDIDAT:\n{cand_json}", IcdPicks)
-        return postprocess(picks.picks, rows), {"keywords": kw_used, "candidates": len(candidates)}
+    if not kw_used:
+        if keluhan or rps or summary:
+            kw_used = icd_keywords(f"KELUHAN: {keluhan}\nRPS: {rps}\nRANGKUMAN: {summary}", llm)
+        else:
+            kw_used = ["fever"]
 
-    # Pencarian kandidat lokal menggunakan TF-IDF
+    # b. Cari maksimal 50 kandidat lokal dari CSV menggunakan expand_keywords + IndeksICD10.cari(..., top_n=50)
+    all_kws = expand_keywords(kw_used)
     indeks = _indeks_dari_rows(rows)
-    kandidat = indeks.cari(kw_used, top_n=JUMLAH_KANDIDAT) if kw_used else []
-    if not kandidat and kw_used:
-        kandidat = [(r.code, r.display) for r in retrieve(rows, kw_used, limit=JUMLAH_KANDIDAT)]
+    kandidat = indeks.cari(all_kws, top_n=JUMLAH_KANDIDAT) if all_kws else []
+    if not kandidat and all_kws:
+        kandidat = [(r.code, r.display) for r in retrieve(rows, all_kws, limit=JUMLAH_KANDIDAT)]
 
-    if not kandidat or not (keluhan or rps):
-        return [], {"keywords": kw_used, "candidates": len(kandidat)}
+    if not kandidat or not (keluhan or rps or summary or obj_str):
+        empty_res = postprocess([], [], rows=rows)
+        return empty_res if isinstance(empty_res, dict) else {"utama": [], "sekunder": []}, {
+            "keywords": kw_used, "candidates": len(kandidat)
+        }
 
-    peta_kandidat = dict(kandidat)
-    prompt = bangun_prompt_icd(keluhan, rps, disangkal, kw_used, kandidat)
+    # c. LLM rerank memilih utama (1-3) dan sekunder (grup)
+    prompt = bangun_prompt_icd(keluhan, rps, disangkal, kw_used, kandidat, objective=obj_str)
     try:
         rek, model2 = llm.generate(SYSTEM, prompt, IcdRerankResult)
-        lihat = set()
-        usulan = []
-        for p in rek.usulan:
-            kode = p.code.strip().upper()
-            if kode not in peta_kandidat or kode in lihat:
-                continue
-            lihat.add(kode)
-            usulan.append({
-                "code": kode,
-                "display": peta_kandidat[kode],  # display resmi dari CSV
-                "deskripsi_id": (p.deskripsi_id or "").strip() or peta_kandidat[kode],
-                "keyakinan": round(min(1.0, max(0.0, p.keyakinan)), 2),
-                "alasan": p.alasan,
-            })
-        usulan = sorted(usulan, key=lambda x: -x["keyakinan"])[:3]
-        return usulan, {"keywords": kw_used, "candidates": len(kandidat), "model": model2}
+        # d. Wajib jalankan hasil LLM melewati postprocess() di icd.py sebelum dikembalikan
+        final_result = postprocess(rek.utama, rek.sekunder, rows=rows)
+        if not isinstance(final_result, dict):
+            final_result = {"utama": final_result, "sekunder": []}
+        return final_result, {"keywords": kw_used, "candidates": len(kandidat), "model": model2}
     except Exception as e:
-        log.error("Rerank ICD gagal (%s); S tetap dikembalikan.", str(e)[:200])
-        return [], {"keywords": kw_used, "candidates": len(kandidat), "error": str(e)[:100]}
-
-
-def suggest_icd(subjective: dict, rows: tuple[IcdRow, ...], llm: LLM) -> tuple[list[dict], dict]:
-    summary = subjective.get("rangkuman_s") or ""
-    keluhan = ((subjective.get("keluhan_utama") or {}).get("nilai") or "").strip()
-    rps = ((subjective.get("riwayat_penyakit_sekarang") or {}).get("nilai") or "").strip()
-    if not (summary.strip() or keluhan or rps):
-        return [], {}
-    ctx = _LAST_EXTRACTION.get(summary) or {}
-    kws = ctx.get("keywords") or subjective.get("kata_kunci_icd10_en") or []
-    if not kws:
-        kws = icd_keywords("ANAMNESIS: " + (summary or keluhan or rps), llm)
-    if summary and summary not in _LAST_EXTRACTION:
-        _LAST_EXTRACTION[summary] = {
-            "keluhan": keluhan,
-            "rps": rps,
-            "disangkal": list(subjective.get("gejala_disangkal") or []),
-            "keywords": list(kws),
+        log.error("Rerank ICD gagal (%s); fallback ke postprocess kosong.", str(e)[:200])
+        empty_res = postprocess([], [], rows=rows)
+        return empty_res if isinstance(empty_res, dict) else {"utama": [], "sekunder": []}, {
+            "keywords": kw_used, "candidates": len(kandidat), "error": str(e)[:100]
         }
-    return icd_pick(summary or keluhan, kws, rows, llm)
+
+
+def suggest_icd(
+    subjective: dict | str,
+    rows: Any,
+    llm: Any = None,
+    objective: Optional[dict | str] = None,
+) -> tuple[dict, dict]:
+    """Rekomendasi ICD-10 stateless ujung ke ujung:
+    1 panggilan LLM untuk istilah medis Inggris -> cari 50 kandidat TF-IDF -> 1 panggilan LLM rerank (utama & sekunder) -> postprocess.
+    """
+    # Toleransi fleksibel bila parameter dioper dengan urutan (subjective, objective, rows, llm)
+    if isinstance(rows, (dict, str)) and isinstance(llm, (tuple, list)):
+        actual_objective = rows
+        actual_rows = llm
+        actual_llm = objective
+        return suggest_icd(subjective, actual_rows, actual_llm, objective=actual_objective)
+
+    keluhan, rps, disangkal, summary, obj_str = _format_clinical_context(subjective, objective)
+    if not (summary or keluhan or rps or obj_str):
+        return {"utama": [], "sekunder": []}, {}
+
+    # a. Buat 1 panggilan LLM untuk mengubah teks subjective (+ objective jika ada)
+    # menjadi daftar istilah medis Inggris standar ICD-10 (gejala + dugaan penyakit)
+    prompt_kw_parts = [
+        f"KELUHAN UTAMA: {keluhan or '-'}",
+        f"RIWAYAT PENYAKIT SEKARANG: {rps or '-'}",
+        f"GEJALA DISANGKAL: {', '.join(disangkal) or '-'}",
+        f"RANGKUMAN ANAMNESIS: {summary or '-'}",
+    ]
+    if obj_str:
+        prompt_kw_parts.append(f"PEMERIKSAAN FISIK / OBJEKTIF:\n{obj_str}")
+    kw_text = "\n".join(prompt_kw_parts)
+
+    keywords = icd_keywords(kw_text, llm)
+
+    # b, c, d. Cari kandidat 50, rerank ke utama & sekunder, jalankan postprocess
+    return icd_pick(
+        subjective=subjective,
+        keywords=keywords,
+        rows=rows,
+        llm=llm,
+        objective=objective,
+    )

@@ -13,12 +13,13 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from app.config import Settings
 
 # Pengecualian awalan kode penyebab eksternal (Bab XX ICD-10: V01-Y98)
 KECUALIKAN_AWALAN_KODE = ("V", "W", "X", "Y")
-JUMLAH_KANDIDAT = 30
+JUMLAH_KANDIDAT = 50
 
 STOPWORDS = {
     "and", "the", "with", "without", "other", "not", "elsewhere", "classified",
@@ -279,22 +280,139 @@ def retrieve(rows: tuple[IcdRow, ...], keywords: list[str], limit: int = 50) -> 
     return [by_code[code] for code, _ in kandidat if code in by_code]
 
 
-def postprocess(picks, rows: tuple[IcdRow, ...], k: int = 3) -> list[dict]:
-    """Filter usulan: buang kode invalid/eksternal dan deduping kode induk vs turunan spesifik."""
-    by_code = {r.code: r for r in rows if not r.code.upper().startswith(KECUALIKAN_AWALAN_KODE)}
-    chosen: list[dict] = []
-    for p in sorted(picks, key=lambda p: -p.keyakinan):
-        code = p.code.strip().upper()
-        if code not in by_code or any(c["code"] == code for c in chosen):
-            continue
-        deskripsi = getattr(p, "deskripsi_id", "").strip() or by_code[code].display
-        chosen.append({
+def postprocess(
+    utama: Any = None,
+    sekunder: Any = None,
+    rows: tuple[IcdRow, ...] | None = None,
+    k: int = 3,
+) -> dict[str, list] | list[dict]:
+    """Filter usulan ICD-10 dengan 4 aturan wajib:
+    a. Buang kode yang tidak ada di rows (katalog CSV).
+    b. Buang kode penyebab eksternal berawalan V, W, X, Y.
+    c. Buang kode induk (misal R10) jika turunannya (misal R10.1) terpilih dalam grup yang sama.
+    d. Buang kode dari sekunder jika sudah muncul di utama (serta hindari duplikat antar-grup sekunder).
+
+    Mendukung format masukan terpisah (utama, sekunder, rows), objek hasil rerank,
+    maupun pemanggilan kompatibilitas lama (picks, rows).
+    """
+    # Deteksi pemanggilan lama postprocess(picks, rows)
+    if rows is None and isinstance(sekunder, (tuple, list)):
+        if not sekunder or isinstance(sekunder[0], IcdRow) or hasattr(sekunder[0], "code"):
+            rows = tuple(sekunder)
+            sekunder = None
+
+    # Normalisasi bila masukan utama berupa dict atau objek model (IcdRerankResult)
+    if isinstance(utama, dict):
+        if "sekunder" in utama and sekunder is None:
+            sekunder = utama.get("sekunder")
+        utama = utama.get("utama", [])
+    elif hasattr(utama, "utama") and hasattr(utama, "sekunder"):
+        if sekunder is None:
+            sekunder = getattr(utama, "sekunder", [])
+        utama = getattr(utama, "utama", [])
+
+    rows_tuple = rows or ()
+    # Aturan a & b: Hanya kode yang ada di rows dan BUKAN berawalan V, W, X, Y
+    by_code = {
+        r.code.strip().upper(): r
+        for r in rows_tuple
+        if r.code and not r.code.strip().upper().startswith(KECUALIKAN_AWALAN_KODE)
+    }
+
+    def _clean_item(p) -> dict | None:
+        if isinstance(p, dict):
+            code = str(p.get("code") or "").strip().upper()
+            deskripsi = str(p.get("deskripsi_id") or "").strip()
+            alasan = str(p.get("alasan") or "").strip()
+            try:
+                keyakinan = float(p.get("keyakinan", 0.0))
+            except (ValueError, TypeError):
+                keyakinan = 0.0
+        else:
+            code = str(getattr(p, "code", "") or "").strip().upper()
+            deskripsi = str(getattr(p, "deskripsi_id", "") or "").strip()
+            alasan = str(getattr(p, "alasan", "") or "").strip()
+            try:
+                keyakinan = float(getattr(p, "keyakinan", 0.0))
+            except (ValueError, TypeError):
+                keyakinan = 0.0
+
+        if not code or code not in by_code:
+            return None
+
+        row = by_code[code]
+        return {
             "code": code,
-            "display": by_code[code].display,
-            "deskripsi_id": deskripsi,
-            "keyakinan": round(max(0.0, min(1.0, p.keyakinan)), 2),
-            "alasan": p.alasan,
-        })
-    codes = {c["code"] for c in chosen}
-    chosen = [c for c in chosen if not any(o != c["code"] and o.startswith(c["code"] + ".") for o in codes)]
-    return chosen[:k]
+            "display": row.display,
+            "deskripsi_id": deskripsi or row.display,
+            "keyakinan": round(max(0.0, min(1.0, keyakinan)), 2),
+            "alasan": alasan,
+        }
+
+    def _dedupe_parent_child(items: list[dict]) -> list[dict]:
+        # Aturan c: Buang kode induk (misal R10) jika turunannya (misal R10.1) terpilih dalam grup yang sama
+        codes_in_group = {it["code"] for it in items}
+        result = []
+        for it in items:
+            code = it["code"]
+            has_child = any(o != code and o.startswith(code + ".") for o in codes_in_group)
+            if not has_child:
+                result.append(it)
+        return result
+
+    # 1. Proses grup UTAMA
+    raw_utama = list(utama or [])
+    cleaned_utama: list[dict] = []
+    seen_in_utama: set[str] = set()
+
+    for it in sorted(raw_utama, key=lambda x: -getattr(x, "keyakinan", 0.0) if not isinstance(x, dict) else -float(x.get("keyakinan", 0.0))):
+        cl = _clean_item(it)
+        if cl and cl["code"] not in seen_in_utama:
+            seen_in_utama.add(cl["code"])
+            cleaned_utama.append(cl)
+
+    chosen_utama = _dedupe_parent_child(cleaned_utama)[:k]
+    seen_codes = {c["code"] for c in chosen_utama}
+
+    # Jika sekunder tidak diberikan (pemanggilan lama), kembalikan list utama saja
+    if sekunder is None:
+        return chosen_utama
+
+    # 2. Proses grup-grup SEKUNDER
+    chosen_sekunder: list[list[dict]] = []
+    raw_groups = list(sekunder)
+    for grp in raw_groups:
+        if hasattr(grp, "pilihan"):
+            items = getattr(grp, "pilihan") or []
+        elif isinstance(grp, dict) and "pilihan" in grp:
+            items = grp.get("pilihan") or []
+        elif isinstance(grp, (list, tuple)):
+            items = grp
+        else:
+            items = [grp] if grp else []
+
+        cleaned_group: list[dict] = []
+        seen_in_group: set[str] = set()
+
+        for it in sorted(items, key=lambda x: -getattr(x, "keyakinan", 0.0) if not isinstance(x, dict) else -float(x.get("keyakinan", 0.0))):
+            cl = _clean_item(it)
+            if not cl:
+                continue
+            code = cl["code"]
+            # Aturan d: Buang kode dari sekunder jika sudah muncul di utama
+            # serta hindari duplikat antar-grup sekunder
+            if code in seen_codes or code in seen_in_group:
+                continue
+            seen_in_group.add(code)
+            cleaned_group.append(cl)
+
+        # Aturan c: Buang kode induk jika turunannya terpilih dalam grup yang sama
+        final_group = _dedupe_parent_child(cleaned_group)[:k]
+        if final_group:
+            seen_codes.update(c["code"] for c in final_group)
+            chosen_sekunder.append(final_group)
+
+    return {
+        "utama": chosen_utama,
+        "sekunder": chosen_sekunder,
+    }

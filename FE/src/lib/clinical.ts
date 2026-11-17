@@ -20,6 +20,12 @@ export const getConsultation = (id: number) => apiRequest<Consultation>(visitPat
 export const getScribe = (id: number) => apiRequest<ScribeState>(visitPath(id, '/scribe'))
 export const getResume = (id: number) => apiRequest<Resume>(visitPath(id, '/resume'))
 export const saveSoap = (id: number, data: Record<string, string>) => apiRequest<{ status: string; detail?: string; submission_id?: number }>(visitPath(id, '/soap'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+export const triggerSuggestIcd = (id: number, data?: { subjective?: Record<string, string>; objective?: unknown }) =>
+  apiRequest<{ status: string; message: string }>(visitPath(id, '/suggest-icd'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data || {})
+  })
 
 export async function finishAudioSession(id: number, sessionId: number) {
   const body = new FormData()
