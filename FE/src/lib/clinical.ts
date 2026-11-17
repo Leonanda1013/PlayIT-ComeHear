@@ -47,5 +47,20 @@ export function formatWib(value: string | null | undefined) {
   return value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' }).format(new Date(value)) : '—'
 }
 
+export function isManualSubjective(consultation: Consultation): boolean {
+  const c = consultation.visit.consent as { decision?: string } | null
+  if (consultation.visit.status === 'manual' || c?.decision === 'tolak') {
+    return true
+  }
+  if (!consultation.session && !consultation.failed_session) {
+    return true
+  }
+  return false
+}
+
+export function subjectiveStagePath(consultation: Consultation): 'subjektif' | 'draf-s' {
+  return isManualSubjective(consultation) ? 'subjektif' : 'draf-s'
+}
+
 export const searchKfaDrugs = (q = '') =>
   apiRequest<KfaDrug[]>(`/api/kfa?q=${encodeURIComponent(q)}`)

@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Plus, Trash2 } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { btn, FieldBox, inputClass, Label, Notice, Panel, Radio, SectionLabel, SelectInput, TextArea, UnitInput } from '@/components/ui/kit'
-import { saveSoap } from '@/lib/clinical'
+import { saveSoap, subjectiveStagePath } from '@/lib/clinical'
 import type { Consultation } from '@/lib/types'
 
 export const EXAM_PARTS = ['Kepala', 'Mata', 'Leher', 'Dada / Jantung', 'Paru', 'Perut', 'Alat Gerak Atas', 'Alat Gerak Bawah', 'Anus–Genitalia', 'Kulit', 'Lain-lain']
@@ -195,10 +195,7 @@ export function ObjectivePage({ data }: { data: Consultation }) {
         type="button"
         className={btn.outline}
         onClick={() => {
-          const backPath = data.visit.status === 'manual' || (!data.session && !data.note.subjective_summary)
-            ? `/kunjungan/${id}/subjektif`
-            : `/kunjungan/${id}/draf-s`
-          navigate(backPath)
+          navigate(`/kunjungan/${id}/${subjectiveStagePath(data)}`)
         }}
       >
         Kembali

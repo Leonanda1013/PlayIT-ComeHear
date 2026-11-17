@@ -4,7 +4,7 @@ import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router'
 import { AppShell } from '@/components/AppShell'
 import { ErrorState, LoadingState } from '@/components/Feedback'
 import { apiRequest, ApiError } from '@/lib/api'
-import { getConsultation } from '@/lib/clinical'
+import { getConsultation, isManualSubjective } from '@/lib/clinical'
 import { isDoctor } from '@/lib/format'
 import type { User } from '@/lib/types'
 import { LoginPage } from '@/pages/LoginPage'
@@ -57,21 +57,17 @@ function DoctorVisitRoute({ user, onLogout, onSessionExpired }: SessionProps) {
   const hasSubjective = Boolean(data.note.subjective_summary.trim() || Object.values(data.note.subjective).some((value) => String(value).trim()))
 
   if (stage === 'draf-s') {
-    if (data.visit.status === 'manual') {
+    if (isManualSubjective(data)) {
+      const isRefused = data.visit.status === 'manual' || (data.visit.consent as { decision?: string } | null)?.decision === 'tolak'
       return (
         <Navigate
           to={`/kunjungan/${id}/subjektif`}
           replace
-          state={{ redirectReason: 'Pasien menolak perekaman AI. Anda dialihkan ke halaman pengisian Subjektif manual.' }}
-        />
-      )
-    }
-    if (!data.session && !hasSubjective && !data.failed_session) {
-      return (
-        <Navigate
-          to={`/kunjungan/${id}/subjektif`}
-          replace
-          state={{ redirectReason: 'Belum ada rekaman audio atau draf Subjektif. Anda dialihkan ke halaman Subjektif untuk memulai perekaman.' }}
+          state={{
+            redirectReason: isRefused
+              ? 'Pasien menolak perekaman AI. Anda dialihkan ke halaman pengisian Subjektif manual.'
+              : 'Belum ada rekaman audio atau draf Subjektif. Anda dialihkan ke halaman Subjektif untuk memulai perekaman.',
+          }}
         />
       )
     }
