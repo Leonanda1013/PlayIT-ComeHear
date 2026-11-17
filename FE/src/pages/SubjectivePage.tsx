@@ -402,11 +402,11 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       </section>
     ) : <>
       {/* Kartu AI Scribe: perekam + transkrip + draf Subjektif. */}
-      <section className="flex min-h-[115px] flex-wrap items-center gap-5 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4" aria-live="polite">
-        <span className={`inline-flex h-[38px] items-center gap-2.5 rounded-[8px] border px-3.5 text-[14px] font-semibold ${recording ? 'border-[#f2a7a7] bg-[#fff1f1] text-[#b42727]' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}><span className={`size-2 rounded-full ${recording ? 'animate-pulse bg-[#e03131]' : 'bg-[#0b6e7d]'}`} />{recording ? (paused ? 'Rekaman Dijeda' : 'Sedang Merekam') : busy ? 'Mengirim Rekaman…' : 'Mikrofon Siap'}</span>
+      <section className={`flex min-h-[115px] flex-wrap items-center gap-5 rounded-[16px] border px-[19px] py-4 ${recording ? 'border-[#f2a7a7] bg-[#fff8f8]' : 'border-[#dce6eb] bg-[#fbfdfe]'}`} aria-live="polite">
+        <span className={`inline-flex h-[38px] items-center gap-2.5 rounded-[8px] border px-3.5 text-[14px] font-semibold ${recording ? 'border-[#f2a7a7] bg-[#fff1f1] text-[#b42727]' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}><span className={`size-2.5 rounded-full ${recording && !paused ? 'animate-pulse bg-[#e03131]' : recording ? 'bg-[#b42727]' : 'bg-[#0b6e7d]'}`} />{recording ? (paused ? 'Rekaman Dijeda' : 'Sedang Merekam') : busy ? 'Mengirim Rekaman…' : 'Mikrofon Siap'}</span>
         <p className="font-inter text-[22px] font-bold tabular-nums text-[#3f4c55]">{mmss(seconds)} <span className="font-jakarta text-[15px] font-semibold text-[#5f7284]">menit</span></p>
         {recording && !paused && <Waveform stream={activeStream} />}
-        <div className="ml-auto flex flex-wrap gap-4">
+        <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto">
           {!recording ? <>
             <div className="relative" ref={micMenuRef}>
               <button
@@ -460,17 +460,17 @@ export function SubjectivePage({ data }: { data: Consultation }) {
               type="button"
               disabled={busy}
               onClick={() => startRecording(false)}
-              className={`inline-flex h-9 items-center gap-2 rounded-[8px] px-4 text-[14px] font-semibold shadow-sm transition-all disabled:opacity-50 ${
+              className={`inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-[12px] px-7 text-[16px] font-bold shadow-md transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ch-brand disabled:opacity-50 sm:w-auto ${
                 consent === 'setuju'
-                  ? 'bg-ch-brand text-white hover:bg-ch-brand-hover ring-2 ring-ch-brand/20'
-                  : 'border border-[#dce6eb] bg-[#eef4f7] text-[#3d5266] hover:border-ch-brand hover:text-ch-teal'
+                  ? 'bg-ch-brand text-white ring-4 ring-ch-brand/20 hover:bg-ch-brand-hover'
+                  : 'border-2 border-ch-brand bg-[#eaf6f8] text-ch-teal hover:bg-[#d9f3f6]'
               }`}
             >
-              <Play className="size-3 fill-current" /> Mulai Rekam
+              <Play className="size-5 fill-current" /> Mulai Rekam
             </button>
           </> : <>
             <button type="button" className="inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266]" onClick={() => { if (paused) recorder.current?.resume(); else recorder.current?.pause(); setPaused(!paused) }}>{paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{paused ? 'Lanjutkan' : 'Jeda'}</button>
-            <button type="button" className="inline-flex h-9 items-center gap-2 rounded-[8px] bg-ch-brand px-4 text-[14px] font-semibold text-white hover:bg-ch-brand-hover" onClick={() => recorder.current?.stop()}><Square className="size-3.5 fill-current" /> Selesai Rekam</button>
+            <button type="button" className="inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-[12px] bg-[#b42727] px-7 text-[16px] font-bold text-white shadow-md ring-4 ring-[#b42727]/20 transition-colors hover:bg-[#922020] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b42727] sm:w-auto" onClick={() => recorder.current?.stop()}><Square className="size-5 fill-current" /> Berhenti Rekam</button>
           </>}
         </div>
       </section>
@@ -513,25 +513,25 @@ export function SubjectivePage({ data }: { data: Consultation }) {
           <li>• <b className="text-ch-ink">Hentikan &amp; Tinggalkan</b>: Membuang rekaman saat ini dan berpindah ke halaman tujuan.</li>
         </ul>
 
-        <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-[#e2ecf0] pt-3">
+        <div className="grid gap-2.5 border-t border-[#e2ecf0] pt-4">
           <button
             type="button"
             onClick={handleCancelLeave}
-            className="inline-flex h-9 items-center rounded-[8px] bg-ch-brand px-4 text-[13px] font-semibold text-white hover:bg-ch-brand-hover shadow-sm"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-[8px] bg-ch-brand px-4 py-2 text-center text-[13px] font-semibold text-white shadow-sm hover:bg-ch-brand-hover"
           >
             Tetap di Halaman Ini
           </button>
           <button
             type="button"
             onClick={handleFinishAndLeave}
-            className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-[#0b8597] bg-[#e2f6f9] px-3.5 text-[13px] font-semibold text-[#0b8597] hover:bg-[#d0f0f5]"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-[8px] border border-[#0b8597] bg-[#e2f6f9] px-4 py-2 text-center text-[13px] font-semibold text-[#0b8597] hover:bg-[#d0f0f5]"
           >
             <Check className="size-3.5" /> Selesaikan &amp; Susun Draf
           </button>
           <button
             type="button"
             onClick={handleDiscardAndLeave}
-            className="inline-flex h-9 items-center rounded-[8px] border border-[#cfdbe2] bg-[#f0f4f7] px-3.5 text-[13px] font-semibold text-[#4b5f70] hover:bg-[#e4ecf0]"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-[8px] border border-[#cfdbe2] bg-[#f0f4f7] px-4 py-2 text-center text-[13px] font-semibold text-[#4b5f70] hover:bg-[#e4ecf0]"
           >
             Hentikan &amp; Tinggalkan
           </button>

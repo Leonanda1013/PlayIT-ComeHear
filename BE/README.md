@@ -51,7 +51,7 @@ menampilkan jumlah NIK ganda dan keberadaan indeks tersebut sebelum migrasi dija
 
 ### Pembagian akses backend
 
-| Area | Dokter | Admin/perawat rekam medis |
+| Area | Dokter | Admin/t rekam medis |
 |---|---:|---:|
 | Antrean dokter, panggil pasien, SOAP, scribe/audio, ICD/KFA, persetujuan | Ya | Tidak |
 | Pendaftaran, koreksi identitas pasien, konfirmasi kedatangan | Tidak | Ya |
