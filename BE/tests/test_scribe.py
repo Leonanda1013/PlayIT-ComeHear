@@ -1,3 +1,5 @@
+import pytest
+
 from app.models import ScribeSession, Visit
 from app.scribe.asr import parse_text_transcript
 from app.scribe.icd import load_icd, postprocess, retrieve
@@ -53,7 +55,18 @@ def test_icd_synonym_expansion_and_code_search(settings):
     assert "A01" in code_found and "A01.0" in code_found
 
 
-def test_pipeline_text_to_draft_with_mock(session_factory, db, visit_with_note, settings):
+def test_pipeline_text_to_draft_with_mock(session_factory, db, visit_with_note, settings, monkeypatch):
+    import app.scribe.pipeline as pl
+
+    original_extract = pl.extract_subjective
+
+    def extract_with_keywords(segments, llm):
+        result, model = original_extract(segments, llm)
+        result["kata_kunci_icd10_en"] = ["fever", "headache"]
+        return result, model
+
+    monkeypatch.setattr(pl, "extract_subjective", extract_with_keywords)
+    monkeypatch.setattr(pl, "icd_keywords", lambda *_: pytest.fail("kata kunci ICD sudah tersedia"))
     visit_with_note.note.subjective = {}
     ss = ScribeSession(visit_id=visit_with_note.id, status="queued")
     db.add(ss)

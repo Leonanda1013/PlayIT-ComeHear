@@ -4,7 +4,7 @@ Supaya dokter tidak menunggu:
 1. ASR berjalan selama rekaman (`live_asr`): potongan audio dikirim tiap beberapa detik dan
    ditranskripsi bertahap, jadi saat tombol Selesai ditekan sisa ASR tinggal beberapa detik.
 2. Label pembicara digabung ke panggilan ekstraksi S (satu putaran LLM, bukan dua).
-3. Kata kunci ICD dicari dari transkrip bersamaan dengan ekstraksi S.
+3. Kata kunci ICD diambil dari hasil ekstraksi S; panggilan tambahan hanya jika hasilnya kosong.
 4. Bagian S disimpan begitu jadi (status "coding"), sebelum usulan ICD selesai.
 """
 import logging
@@ -103,7 +103,6 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
 
             t = step("extracting")
             raw_text = "\n".join(s["text"] for s in segments)
-            kw_future = llm_pool.submit(icd_keywords, raw_text, llm)
             subjective, models["extract_llm"] = extract_subjective(segments, llm)
             ss.transcript = segments
             ss.extraction = subjective
@@ -121,11 +120,7 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             visit.status = "draft"
             t = step("coding")  # S sudah tampil di layar review; ICD menyusul
 
-            try:
-                keywords = kw_future.result()
-            except Exception:
-                log.warning("kata kunci ICD dari transkrip gagal; ulangi dari rangkuman", exc_info=True)
-                keywords = subjective.get("kata_kunci_icd10_en") or icd_keywords("ANAMNESIS: " + subjective.get("rangkuman_s", ""), llm)
+            keywords = subjective.get("kata_kunci_icd10_en") or icd_keywords(raw_text, llm)
             icd, models["icd"] = icd_pick(subjective, keywords, icd_table(settings), llm)
             ss.icd_suggestions = icd
             timings["icd_s"] = round(time.perf_counter() - t, 1)

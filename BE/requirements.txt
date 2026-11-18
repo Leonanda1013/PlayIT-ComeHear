@@ -9,6 +9,5 @@ pydantic-settings
 httpx
 faster-whisper
 google-genai
-anthropic
 rapidfuzz
 pytest
