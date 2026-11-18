@@ -40,11 +40,9 @@ class Settings(BaseSettings):
     asr_device: str = "cpu"
     asr_compute_type: str = "int8"
 
-    llm_providers: str = "gemini,anthropic"
+    llm_providers: str = "gemini"
     gemini_api_key: str = ""
-    gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite"
-    anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-5-5"
+    gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.5-flash"
 
     worker_interval_s: float = 3.0
     max_send_attempts: int = 6

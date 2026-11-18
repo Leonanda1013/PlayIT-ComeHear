@@ -1,4 +1,4 @@
-"""Cek koneksi asli: LLM (Gemini/Claude) dan SATUSEHAT sandbox. Tidak pernah mencetak rahasia.
+"""Cek koneksi asli: Gemini dan SATUSEHAT sandbox. Tidak pernah mencetak rahasia.
 
   python scripts/check_real.py            # LLM + token + baca data master sandbox
   python scripts/check_real.py --send     # juga kirim 1 bundle uji ke sandbox (membuat data dummy baru)
@@ -19,7 +19,7 @@ from app.satusehat.client import SatusehatClient, outcome_codes, parse_entry_ids
 from app.scribe.asr import parse_text_transcript  # noqa: E402
 from app.scribe.extract import extract_subjective, label_speakers, suggest_icd  # noqa: E402
 from app.scribe.icd import icd_table  # noqa: E402
-from app.scribe.llm import AnthropicProvider, GeminiProvider, LLM  # noqa: E402
+from app.scribe.llm import LLM  # noqa: E402
 
 TRANSKRIP = """Siang Bu, silakan duduk. Ini adik Raka ya, keluhannya apa Bu?
 Siang Dok. Ini Raka ket wingi isuk awakke sumer panas tinggi banget Dok, terus anaknya sambat sirahne ngelu, badannya lemes nggak mau main.
@@ -34,34 +34,33 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 def check_llm(s):
     print("\n=== LLM ===")
-    for cls, key in ((GeminiProvider, s.gemini_api_key), (AnthropicProvider, s.anthropic_api_key)):
-        if not key:
-            print(f"{SKIP} {cls.name}: API key kosong")
-            continue
-        llm = LLM(s.model_copy(update={"llm_providers": cls.name}))
-        segs = parse_text_transcript(TRANSKRIP)  # tanpa label: uji juga penandaan pembicara
-        try:
-            t0 = time.perf_counter()
-            segs, m1 = label_speakers(segs, llm)
-            t1 = time.perf_counter()
-            subj, m2 = extract_subjective(segs, llm)
-            t2 = time.perf_counter()
-            icd, meta = suggest_icd(subj, icd_table(s), llm)
-            t3 = time.perf_counter()
-        except Exception as e:
-            print(f"{FAIL} {cls.name}: {e}")
-            continue
-        print(f"{OK} {cls.name} ({m2}) pembicara {t1 - t0:.1f}s, S {t2 - t1:.1f}s, ICD {t3 - t2:.1f}s")
-        print("   pembicara:", [x["speaker"] for x in segs])
-        for k in ("keluhan_utama", "riwayat_penyakit_sekarang", "riwayat_alergi", "riwayat_pengobatan"):
-            f = subj[k]
-            print(f"   {k}: [{f['status']}, grounding {f['grounding']}] {f['nilai']}")
-        print("   alergi:", [(a["zat"], a["kategori"], a["kepastian"]) for a in subj["alergi_terstruktur"]])
-        print("   disangkal:", subj["gejala_disangkal"])
-        print("   rangkuman:", subj["rangkuman_s"])
-        print("   ICD kata kunci:", meta.get("keywords"), "| kandidat:", meta.get("candidates"))
-        for c in icd:
-            print(f"   ICD {c['code']} {c['display']} ({c['keyakinan']}) - {c['alasan']}")
+    if not s.gemini_api_key:
+        print(f"{SKIP} Gemini: API key kosong")
+        return
+    llm = LLM(s.model_copy(update={"llm_providers": "gemini"}))
+    segs = parse_text_transcript(TRANSKRIP)  # tanpa label: uji juga penandaan pembicara
+    try:
+        t0 = time.perf_counter()
+        segs, _ = label_speakers(segs, llm)
+        t1 = time.perf_counter()
+        subj, m2 = extract_subjective(segs, llm)
+        t2 = time.perf_counter()
+        icd, meta = suggest_icd(subj, icd_table(s), llm)
+        t3 = time.perf_counter()
+    except Exception as e:
+        print(f"{FAIL} Gemini: {e}")
+        return
+    print(f"{OK} Gemini ({m2}) pembicara {t1 - t0:.1f}s, S {t2 - t1:.1f}s, ICD {t3 - t2:.1f}s")
+    print("   pembicara:", [x["speaker"] for x in segs])
+    for k in ("keluhan_utama", "riwayat_penyakit_sekarang", "riwayat_alergi", "riwayat_pengobatan"):
+        f = subj[k]
+        print(f"   {k}: [{f['status']}, grounding {f['grounding']}] {f['nilai']}")
+    print("   alergi:", [(a["zat"], a["kategori"], a["kepastian"]) for a in subj["alergi_terstruktur"]])
+    print("   disangkal:", subj["gejala_disangkal"])
+    print("   rangkuman:", subj["rangkuman_s"])
+    print("   ICD kata kunci:", meta.get("keywords"), "| kandidat:", meta.get("candidates"))
+    for c in icd:
+        print(f"   ICD {c['code']} {c['display']} ({c['keyakinan']}) - {c['alasan']}")
 
 
 def check_satusehat(s, send: bool):

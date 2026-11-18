@@ -15,7 +15,9 @@ suara ──► ASR (faster-whisper) ──► label pembicara (LLM) ──► e
 ASR berjalan **selama** rekaman: browser mengirim potongan audio tiap 5 detik, server mentranskripsi
 tiap ±24 detik audio baru (`MIN_NEW_AUDIO_S`). Setelah Selesai ditekan, layar review langsung terbuka:
 dokter mengisi O, lalu S dan usulan ICD disisipkan tanpa memuat ulang halaman. Label pembicara ikut
-dalam panggilan ekstraksi S, dan kata kunci ICD dicari paralel.
+dalam panggilan ekstraksi S. Kata kunci ICD dari hasil itu dipakai kembali untuk pencarian kode;
+panggilan Gemini tambahan hanya diperlukan jika kata kuncinya kosong. Jika semua model Gemini
+gagal sementara (429/5xx), backend mencoba sekali lagi setelah jeda singkat.
 
 Rekaman 98 detik (CPU i5-12450H, whisper-small, Gemini): S tampil 17–25 detik setelah Selesai,
 sebelumnya 144 detik. Ukur ulang dengan `scripts/simulate_live.py <berkas.webm>`.
@@ -72,8 +74,9 @@ Versi Scribe/ICD-10 saat ini memerlukan `data/icd10_satusehat.csv` dengan kolom 
 
 | Variabel `.env` | Untuk |
 |---|---|
-| `LLM_PROVIDERS` | `gemini,anthropic` (dicoba berurutan). `mock` hanya untuk uji alur, bukan hasil klinis. |
-| `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | Kunci API LLM. Jangan pernah ditulis di notebook atau repo. |
+| `LLM_PROVIDERS` | `gemini` untuk API atau `mock` untuk uji alur, bukan hasil klinis. |
+| `GEMINI_API_KEY` | Kunci API Gemini. Jangan pernah ditulis di notebook atau repo. |
+| `GEMINI_MODELS` | Urutan fallback: `gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.5-flash`. Model yang baru gagal sementara diletakkan paling akhir selama cooldown. |
 | `SATUSEHAT_MODE` | `mock` (tanpa internet) atau `sandbox` (isi `SATUSEHAT_CLIENT_ID/SECRET`; cocokkan URL dengan environment Postman). |
 | `ASR_MODEL` | `small`/`medium`/`large-v3-turbo`, atau path folder CT2 hasil `notebooks/train_asr_v2.ipynb`. |
 
