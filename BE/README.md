@@ -27,6 +27,7 @@ sebelumnya 144 detik. Ukur ulang dengan `scripts/simulate_live.py <berkas.webm>`
 ```bash
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt
+.venv/Scripts/python -m piper.download_voices id_ID-news_tts-medium --download-dir models/piper
 cp .env.example .env        # lalu isi
 .venv/Scripts/python -m uvicorn app.main:app --port 8000
 ```
@@ -34,6 +35,9 @@ cp .env.example .env        # lalu isi
 Buka http://localhost:8000 dan masuk dengan email `rian@rumahsakit.id` (dokter), `perawat@rumahsakit.id`,
 atau `admin@rumahsakit.id`; kata sandi = `DEMO_PASSWORD`. Antrean demo hari ini bisa diisi dari tombol
 "Isi antrean demo" di halaman antrean atau Pendaftaran.
+
+Pengumuman antrean menggunakan model neural Piper Bahasa Indonesia yang diunduh sekali
+ke `BE/models/piper`. Setelah diunduh, sintesis berjalan di backend tanpa layanan suara eksternal.
 
 Alur layar (mengikuti desain UI): **Antrean** (Panggil → Isi SOAP) → **S** (persetujuan rekam, rekam,
 transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI, plan, Inst/Impl, evaluasi)
