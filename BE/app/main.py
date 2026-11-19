@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy import Integer, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -26,6 +26,7 @@ from app.scribe.schemas import SUBJECTIVE_FIELDS
 from app.security import verify_password
 from app.seed import next_queue_no, next_rm_number, next_visit_code, seed, seed_today_queue
 from app.services.notes import ApprovalError, approve_and_queue, correct_identity_and_queue, requeue
+from app.services.queue_speech import announcement_wav
 from app.services.soap_form import KESADARAN, apply_form
 from app.sync.worker import OutboxWorker
 
@@ -145,7 +146,8 @@ def serialize_visit_brief(v: Visit, state: str, draft: tuple[str, str]) -> dict:
         "started_at": v.started_at.isoformat() if v.started_at else None,
         "ended_at": v.ended_at.isoformat() if v.ended_at else None,
         "patient": serialize_patient(v.patient),
-        "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location)},
+        "location": {"id": v.location.id, "name": v.location.name, "label": loc_label(v.location),
+                     "poli": v.location.poli},
         "has_note": bool(v.note),
         "is_approved": bool(v.note and v.note.approved_snapshot)
     }
@@ -423,6 +425,24 @@ def call_patient(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue
         "visit_id": v.id,
         "called_at": v.called_at.isoformat()
     }
+
+
+@app.get("/visits/{visit_id}/panggil/audio")
+def call_patient_audio(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
+                       db: Session = Depends(get_db)):
+    visit = get_visit(db, visit_id)
+    if visit.queue_no is None:
+        raise HTTPException(404, "Nomor antrean belum tersedia")
+    poli = (visit.location.poli or "").strip()
+    destination = poli or loc_label(visit.location)
+    if poli and not poli.lower().startswith("poli "):
+        destination = f"Poli {poli}"
+    try:
+        audio = announcement_wav(visit.queue_no, destination)
+    except Exception:
+        log.exception("Gagal membuat pengumuman antrean")
+        raise HTTPException(503, "Pengumuman suara belum tersedia") from None
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 # ---------------- Konsultasi Klinis (SOAP + Scribe) ----------------

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, BriefcaseMedical, Check, Eye, Megaphone, MoreVertical, Search, X } from 'lucide-react'
+import { ArrowRight, BriefcaseMedical, Check, Eye, Megaphone, MoreVertical, Search, Square, X } from 'lucide-react'
 import { Link } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -12,6 +12,11 @@ import { applyCall, QUEUE_KEY } from '@/lib/queue'
 import type { QueueResponse, Visit } from '@/lib/types'
 
 type TabKey = 'semua' | Visit['state']
+type QueueAnnouncement = {
+  visit: Visit
+  controller: AbortController
+  source?: AudioBufferSourceNode
+}
 const tabs: { key: TabKey; label: string }[] = [
   { key: 'semua', label: 'Semua Pasien' }, { key: 'saat_ini', label: 'Saat Ini' },
   { key: 'selanjutnya', label: 'Selanjutnya' }, { key: 'menunggu', label: 'Menunggu' }, { key: 'selesai', label: 'Selesai' },
@@ -32,6 +37,22 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
   const [tab, setTab] = useState<TabKey>('semua')
   const [search, setSearch] = useState('')
   const [resumeId, setResumeId] = useState<number | null>(null)
+  const [announcementError, setAnnouncementError] = useState('')
+  const [callingId, setCallingId] = useState<number | null>(null)
+  const audio = useRef<AudioContext | null>(null)
+  const activeAnnouncement = useRef<QueueAnnouncement | null>(null)
+  useEffect(() => () => {
+    activeAnnouncement.current?.controller.abort()
+    activeAnnouncement.current = null
+    void audio.current?.close().catch(() => {})
+    audio.current = null
+  }, [])
+
+  function finishAnnouncement(announcement: QueueAnnouncement) {
+    if (activeAnnouncement.current !== announcement) return
+    activeAnnouncement.current = null
+    setCallingId(null)
+  }
   // Satu kali ambil seluruh antrean hari ini; tab dan pencarian disaring di browser agar langsung pindah.
   const queue = useQuery({
     queryKey: QUEUE_KEY,
@@ -41,19 +62,81 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
     staleTime: 10_000,
   })
   const call = useMutation({
-    mutationFn: (id: number) => apiRequest(`/api/backend/visits/${id}/panggil`, { method: 'POST' }),
-    onMutate: async (id) => {
+    mutationFn: ({ visit }: QueueAnnouncement) => apiRequest(`/api/backend/visits/${visit.id}/panggil`, { method: 'POST' }),
+    onMutate: async ({ visit }) => {
       await queryClient.cancelQueries({ queryKey: QUEUE_KEY })
       const previous = queryClient.getQueryData<QueueResponse>(QUEUE_KEY)
-      if (previous) queryClient.setQueryData<QueueResponse>(QUEUE_KEY, { ...previous, rows: applyCall(previous.rows, id) })
+      if (previous) queryClient.setQueryData<QueueResponse>(QUEUE_KEY, { ...previous, rows: applyCall(previous.rows, visit.id) })
       return { previous }
     },
-    onError: (error, _id, context) => {
+    onSuccess: async (_result, announcement) => {
+      const { visit, controller } = announcement
+      const { signal } = controller
+      if (signal.aborted) return
+      try {
+        if (visit.queue_no === null) {
+          setAnnouncementError('Pengumuman suara tidak diputar karena nomor antrean belum tersedia.')
+          return
+        }
+        const context = audio.current
+        if (!context) throw new Error('Audio context unavailable')
+        const response = await fetch(`/api/backend/visits/${visit.id}/panggil/audio`, { credentials: 'same-origin', signal })
+        if (response.status === 401) {
+          onSessionExpired()
+          return
+        }
+        if (!response.ok) throw new Error('Announcement audio unavailable')
+        const buffer = await context.decodeAudioData(await response.arrayBuffer())
+        if (signal.aborted) return
+        if (context.state !== 'running') throw new Error('Audio context is not running')
+        const source = context.createBufferSource()
+        source.buffer = buffer
+        source.connect(context.destination)
+        source.onended = () => {
+          source.disconnect()
+          finishAnnouncement(announcement)
+        }
+        source.start()
+        announcement.source = source
+      } catch {
+        if (!signal.aborted) setAnnouncementError('Pengumuman suara gagal diputar. Tekan Panggil untuk mencoba lagi.')
+      } finally {
+        if (!announcement.source) finishAnnouncement(announcement)
+      }
+    },
+    onError: (error, announcement, context) => {
+      finishAnnouncement(announcement)
       if (context?.previous) queryClient.setQueryData(QUEUE_KEY, context.previous)
       if (error instanceof ApiError && error.status === 401) onSessionExpired()
+      else if (!announcement.controller.signal.aborted) setAnnouncementError('Pasien gagal dipanggil. Tekan Panggil untuk mencoba lagi.')
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
   })
+  function callPatient(visit: Visit) {
+    const active = activeAnnouncement.current
+    if (active) {
+      if (active.visit.id === visit.id) {
+        finishAnnouncement(active)
+        active.controller.abort()
+        active.source?.stop()
+      }
+      return
+    }
+    if (call.isPending) return
+
+    const announcement = { visit, controller: new AbortController() }
+    activeAnnouncement.current = announcement
+    setCallingId(visit.id)
+    setAnnouncementError('')
+    try {
+      // Browser mengizinkan audio saat dipicu langsung oleh klik dokter.
+      audio.current ??= new AudioContext()
+      void audio.current.resume().catch(() => {})
+    } catch {
+      // Pemanggilan kunjungan tetap berjalan jika audio tidak tersedia.
+    }
+    call.mutate(announcement)
+  }
   const seed = useMutation({
     mutationFn: () => apiRequest('/api/backend/pendaftaran/demo', { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
@@ -68,7 +151,8 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
     return c
   }, [all])
   const q = search.trim().toLowerCase()
-  const rows = all.filter((v) => (tab === 'semua' || v.state === tab) && (!q || v.patient.name.toLowerCase().includes(q) || v.patient.rm_number.toLowerCase().includes(q)))
+  // Pasien yang sedang dipanggil tetap terlihat saat statusnya berpindah ke Saat Ini.
+  const rows = all.filter((v) => v.id === callingId || ((tab === 'semua' || v.state === tab) && (!q || v.patient.name.toLowerCase().includes(q) || v.patient.rm_number.toLowerCase().includes(q))))
 
   return (
     <AppShell user={user} onLogout={onLogout}>
@@ -96,13 +180,18 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
           </label>
         </div>
 
+        {announcementError && <p role="status" className="mt-3 text-sm text-red-700">{announcementError}</p>}
         <div className="mt-[17px] overflow-x-auto pb-1 lg:overflow-visible">
           <div className="min-w-[860px]">
             <div className={`${grid} h-[39px] rounded-[10px] bg-[#e8eff2] px-4 text-[12px] font-semibold text-[#3f5468]`}><span>No</span><span>Status</span><span>Nama Pasien</span><span>Draft SOAP</span><span className="text-center">Aksi</span></div>
             {queue.isPending ? <LoadingState label="Memuat antrean…" />
               : queue.isError ? <div className="mt-4"><ErrorState message={queue.error.message} onRetry={() => queue.refetch()} /></div>
               : rows.length === 0 ? <EmptyState title={q ? 'Pasien tidak ditemukan' : all.length ? 'Tidak ada pasien di tab ini' : 'Belum ada antrean hari ini'} description={q ? 'Periksa ejaan nama atau nomor RM.' : all.length ? 'Pilih tab lain untuk melihat pasien.' : 'Kunjungan yang dikonfirmasi petugas rekam medis akan muncul di sini.'} action={!all.length ? <button type="button" onClick={() => seed.mutate()} disabled={seed.isPending} className="inline-flex h-10 items-center rounded-[10px] bg-ch-brand px-4 text-sm font-semibold text-white hover:bg-ch-brand-hover">Isi antrean demo</button> : undefined} />
-              : <div className="mt-4 border-b border-[#dfe8ec]">{rows.map((visit, i) => <QueueRow key={visit.id} visit={visit} hideTopLine={i === 0 || rows[i - 1]?.state === 'saat_ini'} onCall={() => call.mutate(visit.id)} onResume={() => setResumeId(visit.id)} />)}</div>}
+              : <div className="mt-4 border-b border-[#dfe8ec]">{rows.map((visit, i) => (
+                <QueueRow key={visit.id} visit={visit} hideTopLine={i === 0 || rows[i - 1]?.state === 'saat_ini'}
+                  isCalling={callingId === visit.id} callDisabled={callingId !== visit.id && (callingId !== null || call.isPending)}
+                  onCall={() => callPatient(visit)} onResume={() => setResumeId(visit.id)} />
+              ))}</div>}
           </div>
         </div>
       </section>
@@ -111,12 +200,26 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
   )
 }
 
-function QueueRow({ visit, onCall, onResume, hideTopLine }: { visit: Visit; onCall: () => void; onResume: () => void; hideTopLine: boolean }) {
+function QueueRow({ visit, onCall, onResume, hideTopLine, isCalling, callDisabled }: {
+  visit: Visit; onCall: () => void; onResume: () => void; hideTopLine: boolean; isCalling: boolean; callDisabled: boolean
+}) {
   const current = visit.state === 'saat_ini'
   const [label, pill] = statusPill[visit.state]
   const saved = visit.is_approved || visit.state === 'selesai'
   const draft = saved ? ['Tersimpan', 'border-[#bfe5d2] bg-[#e7f6ee] text-[#137049]'] : visit.has_note ? ['Draf tersimpan', 'border-[#a5e1ea] bg-[#e4f6f9] text-[#0b7f91]'] : ['Belum ada draf', 'border-[#dbe3e8] bg-[#eef2f5] text-[#4b5f70]']
   const meta = `No. RM ${visit.patient.rm_number} · ${genderShort(visit.patient.gender_label)} · ${dateId(visit.patient.birth_date)}`
+  const callStyle = isCalling ? 'border-red-700 bg-red-700 text-white hover:bg-red-800'
+    : current ? 'border-[#d6e3e9] bg-white text-ch-ink hover:border-ch-brand hover:bg-[#eef8fa]'
+      : visit.state === 'selanjutnya' ? 'border-[#5cc9d8] bg-white text-[#0b8597] hover:bg-[#e8f8fa]'
+        : 'border-[#dfe7ec] bg-white text-[#b9c6d0] hover:border-[#5cc9d8] hover:text-[#0b8597]'
+  const callButton = (
+    <button type="button" onClick={onCall} disabled={callDisabled}
+      aria-label={isCalling ? 'Hentikan panggilan suara' : undefined}
+      className={`inline-flex items-center justify-center gap-2 rounded-[8px] border px-3 font-semibold transition-colors disabled:opacity-50 ${current ? 'h-[34px] min-w-[126px] text-[15px]' : 'h-9 text-[13px]'} ${callStyle}`}>
+      {isCalling ? <>Hentikan <Square aria-hidden="true" className="size-4" /></>
+        : <>Panggil {current && <Megaphone aria-hidden="true" className="size-4 text-ch-brand" />}</>}
+    </button>
+  )
 
   if (current) return (
     <article className={`${grid} relative z-10 my-[-1px] h-[113px] rounded-[12px] border-2 border-ch-brand bg-white px-[15px] shadow-[0_4px_0_#cdeef3]`}>
@@ -125,13 +228,7 @@ function QueueRow({ visit, onCall, onResume, hideTopLine }: { visit: Visit; onCa
       <div className="min-w-0 pl-1 pr-4"><p className="truncate text-[15px] font-semibold text-ch-ink">{visit.patient.name}</p><p className="truncate text-[13px] text-[#4b5f70]">{meta}</p></div>
       <span><span className={`inline-flex rounded-[5px] border px-2.5 py-[2px] text-[13px] font-medium ${draft[1]}`}>{draft[0]}</span></span>
       <div className="flex flex-col items-center gap-[10px]">
-        <button
-          type="button"
-          onClick={onCall}
-          className="inline-flex h-[34px] w-[126px] items-center justify-center gap-2 rounded-[8px] border border-[#d6e3e9] bg-white text-[15px] font-semibold text-ch-ink transition-colors hover:border-ch-brand hover:bg-[#eef8fa]"
-        >
-          Panggil <Megaphone className="size-4 text-ch-brand" />
-        </button>
+        {callButton}
         <Link to={`/kunjungan/${visit.id}/subjektif`} className="inline-flex h-9 w-[126px] items-center justify-center gap-2 rounded-[8px] bg-ch-brand text-[13px] font-bold text-white hover:bg-ch-brand-hover">Isi SOAP <ArrowRight className="size-4" /></Link>
       </div>
     </article>
@@ -148,11 +245,7 @@ function QueueRow({ visit, onCall, onResume, hideTopLine }: { visit: Visit; onCa
         {visit.state === 'selesai' ? <>
           <button type="button" onClick={onResume} className="inline-flex h-[27px] items-center gap-1.5 rounded-[6px] border border-[#a5e1ea] bg-[#e4f6f9] px-3 text-[13px] font-medium text-[#0b8597] hover:bg-[#d3f0f4]"><Eye className="size-4" /> Lihat Resume</button>
           <MoreActions rmNumber={visit.patient.rm_number} />
-        </> : visit.state === 'selanjutnya' ? (
-          <button type="button" onClick={onCall} className="inline-flex h-9 items-center rounded-[8px] border border-[#5cc9d8] bg-white px-4 text-[13px] font-semibold text-[#0b8597] hover:bg-[#e8f8fa]">Panggil</button>
-        ) : (
-          <button type="button" onClick={onCall} className="inline-flex h-9 items-center rounded-[8px] border border-[#dfe7ec] bg-white px-4 text-[13px] font-semibold text-[#b9c6d0] transition-colors hover:border-[#5cc9d8] hover:text-[#0b8597]">Panggil</button>
-        )}
+        </> : callButton}
       </div>
     </article>
   )
