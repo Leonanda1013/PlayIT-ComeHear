@@ -32,9 +32,16 @@ cp .env.example .env        # lalu isi
 .venv/Scripts/python -m uvicorn app.main:app --port 8000
 ```
 
-Buka http://localhost:8000 dan masuk dengan email `rian@rumahsakit.id` (dokter), `perawat@rumahsakit.id`,
-atau `admin@rumahsakit.id`; kata sandi = `DEMO_PASSWORD`. Antrean demo hari ini bisa diisi dari tombol
-"Isi antrean demo" di halaman antrean atau Pendaftaran.
+Buka aplikasi dan masuk dengan akun di bawah. Akun demo memakai kata sandi `DEMO_PASSWORD`.
+
+| Nama | Layanan | Email |
+|---|---|---|
+| dr. James Pratama | Poli Umum, Bilik Konsultasi 01 | `james@klinikbungamelati.id` |
+| dr. Kemal Suhendra | Poli Umum, Bilik Konsultasi 02 | `kemal@klinikbungamelati.id` |
+| Siti Rahmawati | Perawat | `perawat@klinikbungamelati.id` |
+| Admin Rekam Medis | Administrasi | `admin@klinikbungamelati.id` |
+
+Di mode mock, gunakan tombol **Isi antrean demo** untuk mengisi antrean kedua bilik.
 
 Pengumuman antrean menggunakan model neural Piper Bahasa Indonesia yang diunduh sekali
 ke `BE/models/piper`. Setelah diunduh, sintesis berjalan di backend tanpa layanan suara eksternal.
@@ -43,14 +50,15 @@ Alur layar (mengikuti desain UI): **Antrean** (Panggil → Isi SOAP) → **S** (
 transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI, plan, Inst/Impl, evaluasi)
 → **Verifikasi** (konfirmasi dokter, Validasi dan Simpan → kirim SATUSEHAT) → **Resume**.
 
-Database lama dari versi sebelum UI baru: jalankan sekali `.venv/Scripts/python scripts/upgrade_demo.py`
-(menambah kolom baru tanpa menghapus data, lalu mengisi antrean demo).
+Untuk memperbarui data master database lama, jalankan `.venv/Scripts/python scripts/upgrade_demo.py --clinic-only`.
+Perintah ini mempertahankan ID, kata sandi akun lama, dan riwayat kunjungan. Pada mode sandbox,
+isi ID Practitioner SATUSEHAT untuk dr. Kemal dan ID Location untuk Bilik 02 sebelum validasi SOAP.
 
 ### Supabase PostgreSQL
 
 1. Dari folder `BE`, isi `DATABASE_URL` di `.env` dengan URI PostgreSQL Supabase dari **Database → Connect**. Variabel ini wajib; server tidak memakai SQLite sebagai fallback. `.env` diabaikan Git. Isi juga `SECRET_KEY` dan `DEMO_PASSWORD`.
 2. Untuk database yang sudah berisi data, jalankan `.venv/Scripts/python scripts/test_db_connection.py --inspect-only` lebih dulu. Perintah ini hanya membaca koneksi serta menunjukkan tabel dan kolom yang belum ada.
-3. Jika migrasi diperlukan, buat backup lalu jalankan `.venv/Scripts/python scripts/test_db_connection.py`. Perintah ini membuat tabel, menambah kolom, dan melakukan seed pada database baru. Startup server juga melakukan inisialisasi yang sama.
+3. Jika migrasi skema diperlukan, buat backup lalu jalankan `.venv/Scripts/python scripts/test_db_connection.py`. Perintah ini membuat tabel, menambah kolom, dan mengisi data demo jika mode mock serta `ENABLE_DEMO_SEED=true`. Startup server juga melakukan inisialisasi yang sama.
 
 NIK pasien dilindungi oleh validasi API dan indeks unik database. Pemeriksaan `--inspect-only` juga
 menampilkan jumlah NIK ganda dan keberadaan indeks tersebut sebelum migrasi dijalankan.

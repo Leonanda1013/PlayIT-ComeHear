@@ -38,7 +38,7 @@ def db(session_factory):
 
 @pytest.fixture
 def doctor(db):
-    return db.scalar(select(User).where(User.role == "dokter"))
+    return db.scalar(select(User).where(User.username == "dokter"))
 
 
 @pytest.fixture

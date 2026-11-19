@@ -23,7 +23,7 @@ ComeHear mendukung alur dari pendaftaran kunjungan hingga dokumentasi SOAP, vali
 | Dokter | Memanggil pasien, mengisi SOAP, meninjau draf AI, memvalidasi rekam medis, melihat riwayat | Keputusan klinis dan finalisasi dilakukan oleh dokter. Draf hasil ekstraksi tetap dapat ditinjau. |
 | Petugas Rekam Medis | Mendaftarkan pasien dan kunjungan, mengonfirmasi kedatangan, melihat riwayat, memantau SATUSEHAT | Detail SOAP dan diagnosis tampil hanya baca. Perbaikan data klinis masuk kembali ke dokter yang berwenang. |
 
-**Data layanan.** Gunakan **Klinik Bunga Melati**, **Poli Umum**, dan **Bilik Konsultasi 03** sebagai contoh yang konsisten. **Umum 03** adalah bentuk pendek pada pemilih bilik. Dokter dapat berbeda antar kunjungan. Pakai nama, nomor RM, tanggal, poli, dan dokter yang konsisten saat satu kunjungan muncul di beberapa layar. Bedakan tanggal layanan, tanggal kunjungan, dan waktu sinkronisasi.
+**Data layanan.** Klinik Bunga Melati memiliki **Poli Umum** dengan **Bilik Konsultasi 01** dan **Bilik Konsultasi 02**. Pemilih bilik menampilkan **Umum 01** dan **Umum 02**. Pakai nama, nomor RM, tanggal, poli, bilik, dan dokter yang konsisten saat satu kunjungan muncul di beberapa layar. Bedakan tanggal layanan, tanggal kunjungan, dan waktu sinkronisasi.
 
 **Alur antarperan.** Pendaftaran → konfirmasi kedatangan → antrean dokter → SOAP → validasi → riwayat dan pemantauan pengiriman. Pisahkan status **kunjungan**, **draf/finalisasi SOAP**, dan **sinkronisasi SATUSEHAT**. Sebuah kunjungan dapat berstatus Selesai sementara pengiriman masih Dalam Proses.
 

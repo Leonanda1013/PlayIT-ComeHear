@@ -7,6 +7,7 @@ export type User = {
   name: string
   role: Role
   practitioner_id: number | null
+  default_location_id: number | null
 }
 
 export type Patient = {

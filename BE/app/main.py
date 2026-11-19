@@ -195,10 +195,24 @@ def audit(db: Session, user: User | None, action: str, obj: str, summary: str = 
     db.add(AuditLog(user_id=user.id if user else None, action=action, obj=obj, summary=summary))
 
 
-def current_location(request: Request, db: Session) -> Location:
+def current_location(request: Request, db: Session, default_location_id: int | None = None) -> Location | None:
     loc_id = request.headers.get("x-location-id") or request.cookies.get("loc", "")
     loc = db.get(Location, int(loc_id)) if str(loc_id).isdigit() else None
+    if loc is None and default_location_id is not None:
+        loc = db.get(Location, default_location_id)
     return loc or db.scalar(select(Location).order_by(Location.id.desc()))
+
+
+def serialize_user(user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "practitioner_id": user.practitioner_id,
+        "default_location_id": user.practitioner.default_location_id if user.practitioner else None,
+    }
 
 
 # ---------------- Root & Auth Routes ----------------
@@ -245,18 +259,8 @@ async def login(request: Request, db: Session = Depends(get_db)):
     db.commit()
 
     token = _sign(user.id)
-    resp = JSONResponse({
-        "status": "ok",
-        "token": token,
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "name": user.name,
-            "role": user.role,
-            "practitioner_id": user.practitioner_id
-        }
-    })
+    resp = JSONResponse({"status": "ok", "token": token, "user": serialize_user(user)})
+    resp.delete_cookie("loc")
     resp.set_cookie("session", token, httponly=True, samesite="lax",
                     secure=settings.secure_cookies, max_age=settings.session_ttl_minutes * 60)
     return resp
@@ -272,14 +276,7 @@ def logout():
 
 @app.get("/api/me")
 def get_me(user: User = Depends(current_user)):
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "practitioner_id": user.practitioner_id
-    }
+    return serialize_user(user)
 
 
 # ---------------- Lokasi ----------------
@@ -354,10 +351,14 @@ def draft_label(v: Visit, state: str) -> tuple[str, str]:
 def queue_api(request: Request, tab: str = "semua", q: str = "",
               user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
               db: Session = Depends(get_db)):
-    loc = current_location(request, db)
+    doctor = user.practitioner
+    loc = current_location(request, db, doctor.default_location_id if doctor else None)
+    if loc is None:
+        raise HTTPException(404, "Belum ada bilik layanan.")
     # Pasien, lokasi, catatan, dan sesi scribe diambil sekaligus (bukan 1 query per baris):
     # ke Supabase tiap query ±50 ms, jadi N+1 membuat antrean terasa lambat.
-    visits = db.scalars(select(Visit).where(Visit.location_id == loc.id, Visit.arrived_at >= today_start_utc())
+    visits = db.scalars(select(Visit).where(Visit.location_id == loc.id, Visit.arrived_at >= today_start_utc(),
+                                           Visit.practitioner_id == user.practitioner_id)
                         .options(joinedload(Visit.patient), joinedload(Visit.location), joinedload(Visit.note),
                                  selectinload(Visit.scribe_sessions))
                         .order_by(Visit.queue_no, Visit.id)).unique().all()
@@ -389,13 +390,11 @@ def queue_api(request: Request, tab: str = "semua", q: str = "",
         rows = [r for r in rows if ql in r["v"].patient.name.lower() or ql in (r["v"].patient.rm_number or "").lower()
                 or ql in r["v"].code.lower()]
     
-    doctor = db.get(Practitioner, user.practitioner_id) if user.practitioner_id else None
-
     return {
         "status": "ok",
         "tab": tab,
         "counts": counts,
-        "location": {"id": loc.id, "name": loc.name, "label": loc_label(loc)},
+        "location": {"id": loc.id, "name": loc.name, "poli": loc.poli, "label": loc_label(loc)},
         "doctor": {"id": doctor.id, "name": doctor.name, "satusehat_id": doctor.satusehat_id} if doctor else None,
         "rows": [serialize_visit_brief(r["v"], r["state"], r["draft"]) for r in rows]
     }
@@ -404,7 +403,7 @@ def queue_api(request: Request, tab: str = "semua", q: str = "",
 @app.post("/visits/{visit_id}/panggil")
 def call_patient(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
                  db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     # Kembalikan pasien lain di bilik/lokasi yang belum selesai diperiksa ke status "menunggu"
     other_active = db.scalars(
         select(Visit).where(
@@ -430,13 +429,13 @@ def call_patient(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue
 @app.get("/visits/{visit_id}/panggil/audio")
 def call_patient_audio(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["queue_call"])),
                        db: Session = Depends(get_db)):
-    visit = get_visit(db, visit_id)
+    visit = get_assigned_visit(db, visit_id, user)
     if visit.queue_no is None:
         raise HTTPException(404, "Nomor antrean belum tersedia")
     poli = (visit.location.poli or "").strip()
-    destination = poli or loc_label(visit.location)
     if poli and not poli.lower().startswith("poli "):
-        destination = f"Poli {poli}"
+        poli = f"Poli {poli}"
+    destination = ", ".join(filter(None, (poli, visit.location.name)))
     try:
         audio = announcement_wav(visit.queue_no, destination)
     except Exception:
@@ -451,6 +450,13 @@ def get_visit(db: Session, visit_id: int) -> Visit:
     if not v:
         raise HTTPException(404, "Kunjungan tidak ditemukan")
     return v
+
+
+def get_assigned_visit(db: Session, visit_id: int, user: User) -> Visit:
+    visit = get_visit(db, visit_id)
+    if visit.practitioner_id != user.practitioner_id:
+        raise HTTPException(403, "Kunjungan ini ditugaskan kepada dokter lain.")
+    return visit
 
 
 def _ensure_note(db: Session, v: Visit) -> ClinicalNote:
@@ -556,7 +562,7 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
 def get_consultation(visit_id: int, request: Request,
                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                      db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     note = _ensure_note(db, v)
     if not v.called_at:
         v.called_at = utcnow()
@@ -574,7 +580,7 @@ def get_consultation(visit_id: int, request: Request,
 async def save_soap(visit_id: int, request: Request,
                     user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                     db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     note = _ensure_note(db, v)
     if note.approved_snapshot:
         raise HTTPException(409, "Catatan sudah divalidasi dan dibekukan.")
@@ -650,7 +656,7 @@ def set_consent(visit_id: int, decision: str = Form(...), given_by_name: str = F
                 relation: str = Form(...),
                 user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                 db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     if v.note and v.note.approved_snapshot:
         raise HTTPException(409, "Persetujuan tidak dapat diubah setelah catatan divalidasi.")
     decision = decision.strip().lower()
@@ -715,7 +721,7 @@ def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, st
 async def upload_audio(visit_id: int, audio: UploadFile = File(...),
                        user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                        db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     if v.consent is None or v.consent.decision != "setuju":
         raise HTTPException(403, "Belum ada persetujuan pasien.")
     suffix = Path(audio.filename or "rekaman.webm").suffix or ".webm"
@@ -731,7 +737,7 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
                       session_id: int | None = Form(None),
                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     if seq == 0:
         path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}.webm"
         ss = _start_session(db, v, user, str(path), status="recording")
@@ -758,7 +764,7 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
 def audio_finish(visit_id: int, session_id: int = Form(...),
                  user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                  db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     ss = db.get(ScribeSession, session_id)
     if ss is None or ss.visit_id != v.id or ss.status != "recording":
         raise HTTPException(409, "Sesi rekaman tidak aktif.")
@@ -785,7 +791,7 @@ def _recoverable_recording(db: Session, visit_id: int, session_id: int | None = 
 @app.get("/visits/{visit_id}/recording-recovery")
 def recording_recovery(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                        db: Session = Depends(get_db)):
-    get_visit(db, visit_id)
+    get_assigned_visit(db, visit_id, user)
     try:
         ss = _recoverable_recording(db, visit_id)
     except HTTPException:
@@ -800,6 +806,7 @@ def recording_recovery(visit_id: int, user: User = Depends(require(*ROLE_MATRIX[
 def resume_recording(visit_id: int, session_id: int,
                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                      db: Session = Depends(get_db)):
+    get_assigned_visit(db, visit_id, user)
     ss = _recoverable_recording(db, visit_id, session_id)
     if not ss.audio_path or not Path(ss.audio_path).exists():
         raise HTTPException(409, "Berkas rekaman sesi tidak tersedia.")
@@ -813,7 +820,7 @@ def resume_recording(visit_id: int, session_id: int,
 def abandon_recording(visit_id: int, session_id: int,
                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     ss = _recoverable_recording(db, visit_id, session_id)
     if ss.audio_path:
         Path(ss.audio_path).unlink(missing_ok=True)
@@ -829,7 +836,7 @@ def abandon_recording(visit_id: int, session_id: int,
 async def upload_text(visit_id: int, request: Request, transcript: str = Form(None),
                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     text = transcript
     if not text:
         ct = request.headers.get("content-type", "")
@@ -850,6 +857,7 @@ async def upload_text(visit_id: int, request: Request, transcript: str = Form(No
 @app.get("/visits/{visit_id}/audio/{session_id}")
 def play_audio(visit_id: int, session_id: int,
                user: User = Depends(require(*ROLE_MATRIX["clinical"])), db: Session = Depends(get_db)):
+    get_assigned_visit(db, visit_id, user)
     ss = db.get(ScribeSession, session_id)
     if not ss or ss.visit_id != visit_id or not ss.audio_path or ss.audio_deleted_at or not Path(ss.audio_path).exists():
         raise HTTPException(404, "Rekaman tidak tersedia (sudah dihapus setelah validasi).")
@@ -864,6 +872,7 @@ def session_status(session_id: int, user: User = Depends(require(*ROLE_MATRIX["c
     ss = db.get(ScribeSession, session_id)
     if not ss:
         raise HTTPException(404)
+    get_assigned_visit(db, ss.visit_id, user)
     return {"status": ss.status, "error": ss.error, "timings": ss.timings, "visit_id": ss.visit_id}
 
 
@@ -872,7 +881,7 @@ def scribe_state(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clini
                  db: Session = Depends(get_db)):
     """Keadaan draf AI untuk asisten klinis (dipanggil berkala selama rekaman/penyusunan)."""
     db.expire_all()
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     ss, failed = _review_session(v), _failed_session(v)
     return {
         "status": ss.status if ss else ("failed" if failed else None),
@@ -892,7 +901,7 @@ async def trigger_icd(visit_id: int, request: Request,
                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
     """Pemicu background untuk menyusun/memperbarui rekomendasi ICD-10."""
-    v = get_visit(db, visit_id)
+    v = get_assigned_visit(db, visit_id, user)
     note = _ensure_note(db, v)
     body = await _body(request)
     subj = body.get("subjective") or dict(note.subjective or {})
@@ -1002,7 +1011,8 @@ def notifications_list(user: User = Depends(current_user), db: Session = Depends
             .where(
                 Visit.arrived_at >= today_start_utc(),
                 Visit.status.in_(["registered", "consented"]),
-                Visit.confirmed_at.is_not(None)
+                Visit.confirmed_at.is_not(None),
+                Visit.practitioner_id == user.practitioner_id,
             )
             .order_by(Visit.queue_no, Visit.id)
             .limit(3)
@@ -1037,6 +1047,7 @@ def _advance_queue(db: Session, done: Visit, user: User) -> Visit | None:
     pending = [o for o in visits if o.id != done.id and not (o.note and o.note.approved_snapshot)]
     if any(o.called_at for o in pending):
         return None
+    pending = [o for o in pending if o.practitioner_id == done.practitioner_id]
     after = [o for o in pending if (o.queue_no or 0) > (done.queue_no or 0)]
     nxt = (after or pending or [None])[0]
     if nxt:
@@ -1231,7 +1242,8 @@ def serialize_rm_visit(v: Visit) -> dict:
 @app.get("/api/practitioners")
 def list_practitioners(user: User = Depends(require(*ROLE_MATRIX["registration"])),
                        db: Session = Depends(get_db)):
-    return [{"id": p.id, "name": p.name} for p in db.scalars(select(Practitioner).order_by(Practitioner.name))]
+    return [{"id": p.id, "name": p.name, "default_location_id": p.default_location_id}
+            for p in db.scalars(select(Practitioner).order_by(Practitioner.name))]
 
 
 @app.get("/api/rm/kunjungan")
@@ -1457,13 +1469,23 @@ async def register_visit(request: Request, user: User = Depends(require(*ROLE_MA
     if not db.get(Patient, int(pid)):
         raise HTTPException(404, "Pasien tidak ditemukan.")
 
-    loc = current_location(request, db)
-    dr = None
-    if body.get("practitioner_id"):
-        dr = db.get(Practitioner, int(body["practitioner_id"]))
+    try:
+        location_id = int(body["location_id"]) if body.get("location_id") else None
+        practitioner_id = int(body["practitioner_id"]) if body.get("practitioner_id") else user.practitioner_id
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Bilik atau dokter tidak valid.") from None
+    dr = db.get(Practitioner, practitioner_id) if practitioner_id is not None else None
+    if practitioner_id is not None and dr is None:
+        raise HTTPException(404, "Dokter tidak ditemukan.")
+    loc = (db.get(Location, location_id) if location_id is not None
+           else current_location(request, db, dr.default_location_id if dr else None))
+    if loc is None:
+        raise HTTPException(404, "Bilik layanan tidak ditemukan.")
     if dr is None:
-        dr = db.get(Practitioner, user.practitioner_id) if user.practitioner_id else \
-            db.scalar(select(Practitioner).order_by(Practitioner.id.desc()))
+        doctors = select(Practitioner).order_by(Practitioner.id.desc())
+        dr = db.scalar(doctors.where(Practitioner.default_location_id == loc.id)) or db.scalar(doctors)
+        if dr is None:
+            raise HTTPException(404, "Dokter tidak ditemukan.")
     arrived = utcnow()
     if body.get("visit_date"):
         try:

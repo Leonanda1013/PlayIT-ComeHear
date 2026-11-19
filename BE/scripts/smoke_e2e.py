@@ -28,15 +28,42 @@ def login(c: TestClient, email: str):
 
 def main():
     with TestClient(app) as c:
-        login(c, "perawat@rumahsakit.id")
+        login(c, "perawat@klinikbungamelati.id")
+        assert c.get("/api/me").json()["name"] == "Siti Rahmawati"
+        rooms = c.get("/api/lokasi").json()
+        assert [(room["name"], room["poli"]) for room in rooms] == [
+            ("Bilik Konsultasi 01", "Poli Umum"), ("Bilik Konsultasi 02", "Poli Umum")]
+        doctors = c.get("/api/practitioners").json()
+        assert {dr["name"]: dr["default_location_id"] for dr in doctors} == {
+            "dr. James Pratama": rooms[0]["id"], "dr. Kemal Suhendra": rooms[1]["id"]}
         res_demo = c.post("/pendaftaran/demo").json()
         assert res_demo["status"] == "ok"
+        patient = c.get("/pendaftaran").json()["patients"][0]
+        kemal = next(dr for dr in doctors if dr["name"] == "dr. Kemal Suhendra")
+        assert c.post("/lokasi", json={"location_id": rooms[0]["id"]}).status_code == 200
+        registration = c.post("/pendaftaran/kunjungan", json={
+            "patient_id": patient["id"], "location_id": rooms[1]["id"], "practitioner_id": kemal["id"],
+        })
+        assert registration.status_code == 200
+        new_visit = registration.json()["visit"]
+        assert new_visit["location_id"] == rooms[1]["id"]
 
-        login(c, "rian@rumahsakit.id")
+        login(c, "kemal@klinikbungamelati.id")
+        kemal_queue = c.get("/antrean").json()
+        assert kemal_queue["doctor"]["name"] == "dr. Kemal Suhendra"
+        assert kemal_queue["location"]["id"] == rooms[1]["id"]
+        assert new_visit["id"] in {v["id"] for v in kemal_queue["rows"]}
+
+        login(c, "james@klinikbungamelati.id")
         queue_res = c.get("/antrean").json()
         assert queue_res["status"] == "ok"
+        assert queue_res["doctor"]["name"] == "dr. James Pratama"
+        assert queue_res["location"]["id"] == rooms[0]["id"]
         assert len(queue_res["rows"]) > 0
         vid = queue_res["rows"][0]["id"]
+        other_visit = kemal_queue["rows"][0]["id"]
+        assert c.post(f"/visits/{other_visit}/panggil").status_code == 403
+        assert c.post(f"/visits/{other_visit}/soap", json={"action": "save"}).status_code == 403
 
         r_panggil = c.post(f"/visits/{vid}/panggil").json()
         assert r_panggil["status"] == "ok"
@@ -101,7 +128,7 @@ def main():
         q_selesai = c.get("/antrean?tab=selesai").json()
         assert any(r["id"] == vid for r in q_selesai["rows"])
 
-        login(c, "perawat@rumahsakit.id")
+        login(c, "perawat@klinikbungamelati.id")
         dasbor = c.get("/dasbor").json()
         assert dasbor["status"] == "ok"
         assert "correction_ratio" in dasbor

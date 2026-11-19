@@ -9,8 +9,19 @@ from sqlalchemy.engine import Engine
 from app.db import Base
 
 
+def ensure_practitioner_default_location(engine: Engine) -> bool:
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        if not inspector.has_table("practitioners") or not inspector.has_table("locations"):
+            return False
+        if any(col["name"] == "default_location_id" for col in inspector.get_columns("practitioners")):
+            return False
+        conn.execute(text("ALTER TABLE practitioners ADD COLUMN default_location_id INTEGER REFERENCES locations(id)"))
+    return True
+
+
 def add_missing_columns(engine: Engine) -> list[str]:
-    added = []
+    added = ["practitioners.default_location_id"] if ensure_practitioner_default_location(engine) else []
     insp = inspect(engine)
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:
@@ -18,7 +29,7 @@ def add_missing_columns(engine: Engine) -> list[str]:
                 continue
             existing = {c["name"] for c in insp.get_columns(table.name)}
             for col in table.columns:
-                if col.name in existing:
+                if col.name in existing or (table.name, col.name) == ("practitioners", "default_location_id"):
                     continue
                 ddl_type = col.type.compile(dialect=engine.dialect)
                 try:

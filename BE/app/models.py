@@ -9,6 +9,7 @@ from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, String,
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.fhir.codes import GENERAL_PRACTICE_CODE, GENERAL_PRACTICE_DISPLAY
 
 
 def utcnow() -> datetime:
@@ -28,6 +29,7 @@ class Practitioner(Base):
     name: Mapped[str] = mapped_column(String(120))
     nik: Mapped[str | None] = mapped_column(String(16))
     satusehat_id: Mapped[str | None] = mapped_column(String(64))
+    default_location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"))
 
 
 class User(Base):
@@ -62,11 +64,11 @@ class Patient(Base):
 class Location(Base):
     __tablename__ = "locations"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120))          # mis. "Bilik Konsultasi 03"
-    poli: Mapped[str | None] = mapped_column(String(120))   # mis. "Poli Penyakit Dalam"
+    name: Mapped[str] = mapped_column(String(120))          # mis. "Bilik Konsultasi 01"
+    poli: Mapped[str | None] = mapped_column(String(120))   # mis. "Poli Umum"
     satusehat_location_id: Mapped[str | None] = mapped_column(String(64))
-    service_type_code: Mapped[str] = mapped_column(String(32), default="394537008")
-    service_type_display: Mapped[str] = mapped_column(String(80), default="Pediatrics")
+    service_type_code: Mapped[str] = mapped_column(String(32), default=GENERAL_PRACTICE_CODE)
+    service_type_display: Mapped[str] = mapped_column(String(80), default=GENERAL_PRACTICE_DISPLAY)
 
 
 class Visit(Base):
