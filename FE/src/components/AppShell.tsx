@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Building2, CalendarDays, CheckCircle2, ChevronDown, CloudUpload, FileText, History, LayoutDashboard, LogOut, Menu, Settings, User as UserIcon, UserRound, Users, X } from 'lucide-react'
-import { Link, NavLink, useLocation } from 'react-router'
+import { Link, NavLink, useLocation, useNavigate } from 'react-router'
 import { btn, Dialog } from '@/components/ui/kit'
 import { getLocations, getNotifications, setLocation } from '@/lib/rm'
 import { getClinicProfile } from '@/lib/clinicConfig'
@@ -13,7 +13,7 @@ const todayLabel = new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: 'num
 type NavItem = { to: string; label: string; icon: React.ComponentType<{ className?: string }>; match?: string[] }
 
 const doctorNav: NavItem[] = [
-  { to: '/kunjungan', label: 'Pemeriksaan Pasien', icon: Users, match: ['/kunjungan'] },
+  { to: '/kunjungan', label: 'Pemeriksaan Pasien', icon: Users, match: ['/kunjungan', '/pengaturan'] },
   { to: '/riwayat', label: 'Riwayat Pasien', icon: History, match: ['/riwayat'] },
 ]
 const rmNav: NavItem[] = [
@@ -178,6 +178,7 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
 }
 
 function AccountPopover({ user, doctor, clinicName, onClose, onLogout }: { user: User; doctor: boolean; clinicName: string; onClose: () => void; onLogout: () => void }) {
+  const navigate = useNavigate()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const onDown = (event: MouseEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) onClose() }
@@ -191,7 +192,7 @@ function AccountPopover({ user, doctor, clinicName, onClose, onLogout }: { user:
       <span className="grid size-10 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-5" /></span>
       <div className="min-w-0"><p className="truncate text-sm font-bold">{user.name}</p><p className="truncate text-xs text-ch-muted">{user.email}</p><p className="text-[11px] text-ch-teal">{doctor ? `Dokter · ${clinicName}` : `Petugas Rekam Medis · ${clinicName}`}</p></div>
     </div>
-    {doctor && <button type="button" onClick={onClose} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#33475b] hover:bg-[#eef6f8]"><Settings className="size-4" /> Pengaturan</button>}
+    {doctor && <button type="button" onClick={() => { onClose(); navigate('/pengaturan') }} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#33475b] hover:bg-[#eef6f8]"><Settings className="size-4" /> Pengaturan</button>}
     <button type="button" onClick={onLogout} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold text-[#bf2e36] hover:bg-[#fdecec]"><LogOut className="size-4" /> Logout</button>
   </div>
 }

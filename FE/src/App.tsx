@@ -20,6 +20,7 @@ import { RmDashboardPage } from '@/pages/rm/RmDashboardPage'
 import { RegistrationPage } from '@/pages/rm/RegistrationPage'
 import { RmVisitsPage } from '@/pages/rm/RmVisitsPage'
 import { SatusehatPage } from '@/pages/rm/SatusehatPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 
 async function getCurrentUser(): Promise<User | null> {
   try {
@@ -134,6 +135,7 @@ function App() {
     <Route path="/kunjungan/:visitId/:stage" element={doctorOnly(session && <DoctorVisitRoute {...session} />)} />
     <Route path="/riwayat" element={doctorOnly(session && <HistoryListPage {...session} base="/riwayat" />)} />
     <Route path="/riwayat/:visitId" element={doctorOnly(session && <HistoryDetailPage {...session} base="/riwayat" />)} />
+    <Route path="/pengaturan" element={doctorOnly(session && <SettingsPage {...session} />)} />
     <Route path="/rm" element={rmOnly(session && <RmDashboardPage {...session} />)} />
     <Route path="/rm/pendaftaran" element={rmOnly(session && <RegistrationPage {...session} />)} />
     <Route path="/rm/kunjungan" element={rmOnly(session && <RmVisitsPage {...session} />)} />
