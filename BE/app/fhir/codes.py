@@ -9,6 +9,8 @@ UCUM = "http://unitsofmeasure.org"
 SNOMED = "http://snomed.info/sct"
 ICD10 = "http://hl7.org/fhir/sid/icd-10"
 KFA = "http://sys-ids.kemkes.go.id/kfa"
+GENERAL_PRACTICE_CODE = "394814009"
+GENERAL_PRACTICE_DISPLAY = "General practice"
 
 VITALS = {
     # key: (LOINC, display, UCUM unit, label Indonesia, proven)

@@ -94,9 +94,12 @@ def check_connection(inspect_only: bool = False):
     print("=" * 60)
     print("3. MEMERIKSA & MENGEKSEKUSI SEED DATA MASTER")
     print("=" * 60)
-    with SessionLocal() as db:
-        seed(db, settings.demo_password)
-        print("[OK] Seed data berhasil diproses.")
+    if settings.enable_demo_seed and settings.satusehat_mode == "mock":
+        with SessionLocal() as db:
+            seed(db, settings.demo_password)
+            print("[OK] Seed data berhasil diproses.")
+    else:
+        print("Seed demo hanya tersedia dalam mode mock dengan ENABLE_DEMO_SEED=true.")
 
     print("\n" + "=" * 60)
     print("4. JUMLAH DATA PER TABEL SAAT INI")

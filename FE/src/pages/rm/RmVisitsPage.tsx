@@ -161,7 +161,7 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
             return <div key={v.id} className={`${grid} min-h-[44px] px-3 py-1.5 text-[12px]`}>
               <div className="min-w-0"><p className="truncate text-[13px] font-semibold">{v.patient.name}</p><p className="text-[10px] text-ch-muted">RM-{v.patient.rm_number}</p></div>
               <span>{dateShort(v.visit_date)}</span>
-              <span className="font-semibold">{(v.location.poli || v.location.name).replace('Poli Penyakit Dalam', 'Poli P. Dalam')}</span>
+              <div><p className="font-semibold">{v.location.poli || v.location.name}</p>{v.location.poli && <p className="text-[10px] text-ch-muted">{v.location.name}</p>}</div>
               <span className="truncate pr-2 text-ch-muted">{v.doctor}</span>
               <span className="text-ch-muted">{v.visit_type === 'Baru' ? 'Pasien Baru' : v.visit_type}</span>
               <span><Badge tone={meta.tone} className="text-[10px]">{meta.label}</Badge></span>

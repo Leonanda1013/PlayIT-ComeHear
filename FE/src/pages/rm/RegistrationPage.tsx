@@ -8,7 +8,7 @@ import { PageTitle } from '@/components/ClinicalHeader'
 import { EditPatientDialog } from '@/components/EditPatientDialog'
 import { btn, Dialog, inputClass, Label, Notice, Panel, SelectInput, TextArea } from '@/components/ui/kit'
 import { dateLong, dateShort, initials, todayIso } from '@/lib/format'
-import { createPatient, createVisit, getLocations, getPractitioners, getRegistration, setLocation, type NewPatient } from '@/lib/rm'
+import { createPatient, createVisit, getLocations, getPractitioners, getRegistration, type NewPatient } from '@/lib/rm'
 import type { Patient } from '@/lib/types'
 
 const STEPS = ['Cari Pasien', 'Data Kunjungan', 'Konfirmasi']
@@ -89,10 +89,7 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
     },
   })
   const saveVisit = useMutation({
-    mutationFn: async () => {
-      if (visit.location_id) await setLocation(visit.location_id)
-      return createVisit({ patient_id: selected!.id, visit_date: visit.visit_date, practitioner_id: visit.practitioner_id || undefined, visit_type: visit.visit_type, admin_note: visit.admin_note })
-    },
+    mutationFn: () => createVisit({ ...visit, patient_id: selected!.id }),
     onSuccess: async (data) => { setSuccess(data.message); await queryClient.invalidateQueries({ queryKey: ['rm-visits'] }); await queryClient.invalidateQueries({ queryKey: ['registry'] }) },
   })
 
@@ -110,10 +107,15 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
   function toConfirm() {
     const errors: Record<string, string> = {}
     if (!visit.visit_date) errors.visit_date = 'Pilih tanggal kunjungan.'
-    if (!visit.location_id) errors.location_id = 'Pilih poli tujuan.'
+    if (!visit.location_id) errors.location_id = 'Pilih bilik tujuan.'
     if (!visit.practitioner_id) errors.practitioner_id = 'Pilih dokter tujuan.'
     setVisitErrors(errors)
     if (!Object.keys(errors).length) setStep(2)
+  }
+
+  function selectRoom(location_id: number) {
+    const doctor = doctors.data?.find((d) => d.default_location_id === location_id)
+    setVisit({ ...visit, location_id, practitioner_id: doctor?.id ?? visit.practitioner_id })
   }
 
   const loc = locations.data?.find((l) => l.id === visit.location_id)
@@ -271,7 +273,7 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
         <h2 className="text-[16px] font-bold">Data Kunjungan</h2>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div><Label htmlFor="tgl" required>Tanggal kunjungan</Label><input id="tgl" type="date" min={todayIso()} className={inputClass} value={visit.visit_date} onChange={(e) => setVisit({ ...visit, visit_date: e.target.value })} />{visit.visit_date && <p className="mt-1 text-[10px] text-ch-faint">{dateLong(visit.visit_date)}</p>}{err(visitErrors.visit_date)}</div>
-          <div><Label htmlFor="poli" required>Poli tujuan</Label><SelectInput id="poli" value={visit.location_id || ''} onChange={(e) => setVisit({ ...visit, location_id: Number(e.target.value) })}><option value="">Pilih poli tujuan</option>{(locations.data || []).map((l) => <option key={l.id} value={l.id}>{l.poli} · {l.name}</option>)}</SelectInput>{err(visitErrors.location_id)}</div>
+          <div><Label htmlFor="bilik" required>Bilik tujuan</Label><SelectInput id="bilik" value={visit.location_id || ''} onChange={(e) => selectRoom(Number(e.target.value))}><option value="">Pilih bilik tujuan</option>{(locations.data || []).map((l) => <option key={l.id} value={l.id}>{l.poli} · {l.name}</option>)}</SelectInput>{err(visitErrors.location_id)}</div>
           <div><Label htmlFor="dokter" required>Dokter tujuan</Label><SelectInput id="dokter" value={visit.practitioner_id || ''} onChange={(e) => setVisit({ ...visit, practitioner_id: Number(e.target.value) })}><option value="">Pilih dokter</option>{(doctors.data || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</SelectInput>{err(visitErrors.practitioner_id)}</div>
           <div><Label htmlFor="jenis">Jenis kunjungan</Label><SelectInput id="jenis" value={visit.visit_type} onChange={(e) => setVisit({ ...visit, visit_type: e.target.value })}><option value="Baru">Baru</option><option value="Kontrol">Kontrol</option></SelectInput></div>
           <div className="md:col-span-2"><Label htmlFor="catatan">Catatan administratif (opsional)</Label><TextArea id="catatan" rows={2} value={visit.admin_note} onChange={(e) => setVisit({ ...visit, admin_note: e.target.value })} placeholder="Contoh: pasien membawa hasil laboratorium sebelumnya." /></div>

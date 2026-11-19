@@ -19,7 +19,7 @@ export const getRegistration = (params?: { q?: string; page?: number; limit?: nu
   return apiRequest<{ patients: Patient[]; queued_patient_ids: number[]; total?: number }>(`/api/backend/pendaftaran${query}`)
 }
 
-export const getPractitioners = () => apiRequest<{ id: number; name: string }[]>('/api/practitioners')
+export const getPractitioners = () => apiRequest<{ id: number; name: string; default_location_id: number | null }[]>('/api/practitioners')
 export const getLocations = () => apiRequest<LocationRef[]>('/api/lokasi')
 export const setLocation = (locationId: number) => apiRequest<{ location: LocationRef }>('/api/backend/lokasi', json({ location_id: locationId }))
 
@@ -38,7 +38,7 @@ export type UpdatePatientData = {
 export const updatePatient = (id: number, data: UpdatePatientData) =>
   apiRequest<{ message: string; patient: Patient }>(`/api/backend/pendaftaran/pasien/${id}`, json(data))
 
-export type NewVisit = { patient_id: number; visit_date: string; practitioner_id?: number; visit_type: string; admin_note: string }
+export type NewVisit = { patient_id: number; visit_date: string; location_id: number; practitioner_id: number; visit_type: string; admin_note: string }
 export const createVisit = (data: NewVisit) =>
   apiRequest<{ message: string; visit: { id: number; queue_no: number } }>('/api/backend/pendaftaran/kunjungan', json(data))
 

@@ -1,10 +1,5 @@
-"""Tingkatkan database lama ke UI baru tanpa menghapus data, lalu isi antrean demo hari ini.
-
-  python scripts/upgrade_demo.py
-
-Aman dijalankan berulang: kolom baru ditambahkan sekali, nomor RM/email hanya diisi bila kosong,
-pasien demo hanya ditambahkan bila belum ada.
-"""
+"""Perbarui data master ke Poli Umum. Antrean demo hanya diisi dalam mode mock."""
+import argparse
 import sys
 from pathlib import Path
 
@@ -13,30 +8,29 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from sqlalchemy import select  # noqa: E402
 
+from app.config import get_settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.migrate import add_missing_columns  # noqa: E402
-from app.models import Location, Patient, Practitioner, User  # noqa: E402
-from app.seed import (DEMO_PATIENTS, SANDBOX_LOCATION, SANDBOX_PATIENTS, next_rm_number,  # noqa: E402
-                      seed_today_queue)
+from app.migrate import add_missing_columns, ensure_practitioner_default_location  # noqa: E402
+from app.models import Patient  # noqa: E402
+from app.seed import (DEMO_PATIENTS, SANDBOX_PATIENTS, configure_general_clinic,  # noqa: E402
+                      next_rm_number, seed_today_queue)
 
 
-def main():
+def main(clinic_only: bool = False):
+    settings = get_settings()
+    is_mock = settings.satusehat_mode == "mock"
     Base.metadata.create_all(engine)
-    print("Kolom baru:", add_missing_columns(engine) or "tidak ada")
+    if clinic_only or not is_mock:
+        if ensure_practitioner_default_location(engine):
+            print("Kolom baru: practitioners.default_location_id")
+    else:
+        print("Kolom baru:", add_missing_columns(engine) or "tidak ada")
     with SessionLocal() as db:
-        for u in db.scalars(select(User)):
-            if not u.email:
-                u.email = {"dokter": "rian@rumahsakit.id"}.get(u.username, f"{u.username}@rumahsakit.id")
-            if u.username == "dokter":
-                u.name = "dr. Rian Sp.PD"
-                if u.practitioner:
-                    u.practitioner.name = "dr. Rian, Sp.PD"
-        if not db.scalar(select(Location).where(Location.poli == "Poli Penyakit Dalam")):
-            db.add(Location(name="Bilik Konsultasi 03", poli="Poli Penyakit Dalam", satusehat_location_id=SANDBOX_LOCATION,
-                            service_type_code="419192003", service_type_display="Internal medicine"))
-        for loc in db.scalars(select(Location).where(Location.poli.is_(None))):
-            loc.poli = "Poli Anak" if loc.service_type_code == "394537008" else "Poli Umum"
-        db.flush()
+        configure_general_clinic(db, settings.demo_password, mock_references=is_mock)
+        if clinic_only or not is_mock:
+            db.commit()
+            print("Data master Poli Umum siap.")
+            return
         names = set(db.scalars(select(Patient.name)))
         for i, (name, born, gender) in enumerate(DEMO_PATIENTS):
             if name not in names:
@@ -45,11 +39,11 @@ def main():
         for p in db.scalars(select(Patient).where(Patient.rm_number.is_(None)).order_by(Patient.id)):
             p.rm_number = next_rm_number(db)
             db.flush()
-        if not db.scalar(select(Practitioner)):
-            raise SystemExit("Tidak ada praktisi; jalankan server sekali dulu agar data awal dibuat.")
         db.commit()
         print("Antrean demo ditambahkan:", seed_today_queue(db), "pasien")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--clinic-only", action="store_true", help="Hanya perbarui data master klinik")
+    main(parser.parse_args().clinic_only)

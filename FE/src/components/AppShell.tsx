@@ -53,10 +53,11 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
   const notifs = useQuery({ queryKey: ['notifications'], queryFn: getNotifications, refetchInterval: 20_000 })
   const clinicName = clinic.data?.name || 'Klinik Bunga Melati'
   const unreadCount = notifs.data?.count || 0
-  const current: LocationRef | undefined = locations.data?.find((l) => l.id === locId) || locations.data?.at(-1)
+  const current: LocationRef | undefined = locations.data?.find((l) => l.id === locId)
+    || locations.data?.find((l) => l.id === user.default_location_id) || locations.data?.at(-1)
   const poli = current?.poli || 'Poli Umum'
-  const room = current?.name || 'Bilik Konsultasi 03'
-  const shortRoom = current?.label || 'Umum 03'
+  const room = current?.name || 'Bilik Konsultasi'
+  const shortRoom = current?.label || 'Pilih bilik'
 
   async function chooseRoom(loc: LocationRef) {
     setRoomOpen(false)
@@ -91,7 +92,7 @@ export function AppShell({ user, onLogout, title, subtitle, children }: {
             {accountOpen && <AccountPopover user={user} doctor={doctor} clinicName={clinicName} onClose={() => setAccountOpen(false)} onLogout={() => { setAccountOpen(false); setConfirmLogout(true) }} />}
             <button type="button" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen} className="flex w-full items-center gap-2.5 h-[60px] rounded-[10px] border border-[#a8e0e8] bg-[#dcf3f6] px-3 text-left transition hover:border-ch-brand">
               <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><UserIcon className="size-[18px]" /></span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-ch-ink">{doctor ? user.name : 'Petugas Rekam Medis'}</span><span className="block truncate text-[11px] text-[#3d5566]">{clinicName}</span></span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-ch-ink">{user.name}</span><span className="block truncate text-[11px] text-[#3d5566]">{clinicName}</span></span>
               {doctor ? <Settings className="size-[17px] text-[#38505e]" /> : <ChevronDown className="size-4 text-[#38505e]" />}
             </button>
           </div>

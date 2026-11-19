@@ -40,7 +40,8 @@ export function SettingsPage({ user, onLogout }: SessionProps) {
   // Nama dari backend berformat kop surat (huruf kapital); di layar ditampilkan Title Case seperti desain.
   const clinicName = (clinic.data?.name || 'Klinik Bunga Melati').toLowerCase().split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   const locId = readLocCookie()
-  const current = locations.data?.find((l) => l.id === locId) || locations.data?.at(-1)
+  const current = locations.data?.find((l) => l.id === locId)
+    || locations.data?.find((l) => l.id === user.default_location_id) || locations.data?.at(-1)
 
   function update(patch: Partial<Prefs>) {
     const next = { ...prefs, ...patch }
