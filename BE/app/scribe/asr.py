@@ -9,8 +9,16 @@ import threading
 
 from app.config import Settings
 
-# Bias kosakata: istilah klinis dan dialek Jawa Timuran yang sering muncul di poli anak.
-INITIAL_PROMPT = (
+# Prompt awal Whisper: konteks + kosakata yang sering muncul. Dibuat singkat karena daftar kata yang
+# terlalu panjang bisa membuat Whisper "mendengar" istilah itu di bagian hening (halusinasi).
+PROMPT_DEWASA = (
+    "Percakapan konsultasi dokter dengan pasien dewasa di poli rawat jalan, bahasa Indonesia "
+    "kadang campur bahasa Jawa. Keluhan: pusing berputar, sakit kepala cenat-cenut, demam, batuk, "
+    "sesak napas, nyeri ulu hati, mual, muntah, lemas. Riwayat darah tinggi, gula darah, maag, "
+    "alergi obat. Obat: parasetamol, amlodipin, metformin, omeprazol."
+)
+# Prompt lama untuk skenario poli anak (dipakai bila ASR_PROMPT=anak).
+PROMPT_ANAK = (
     "Percakapan konsultasi dokter spesialis anak dengan ibu pasien di poli rawat jalan, "
     "bahasa Indonesia campur bahasa Jawa Timuran. "
     "Keluhan: demam tinggi, sumer, nggreges, panas adem, batuk grok-grok, pilek, mual, "
@@ -19,18 +27,27 @@ INITIAL_PROMPT = (
     "Obat: parasetamol sirup, sanmol, tempra, proris, ibuprofen, amoksisilin, cefixime, oralit, zink. "
     "Suhu tubuh tiga puluh delapan koma sembilan derajat, berat badan tujuh belas setengah kilo."
 )
+PROMPTS = {"dewasa": PROMPT_DEWASA, "anak": PROMPT_ANAK, "none": None}
+INITIAL_PROMPT: str | None = PROMPT_DEWASA
 
-_model = None
+
+def prompt_for(s: Settings) -> str | None:
+    return PROMPTS.get(s.asr_prompt, INITIAL_PROMPT)
+
+
+_models: dict[str, object] = {}
 _model_lock = threading.Lock()
 
 
-def get_model(s: Settings):
-    global _model
+def get_model(s: Settings, name: str | None = None):
+    """Model dimuat sekali per nama (live dan final bisa berbeda) lalu dipakai ulang."""
+    key = name or s.asr_model
     with _model_lock:
-        if _model is None:
+        if key not in _models:
             from faster_whisper import WhisperModel
-            _model = WhisperModel(s.asr_model, device=s.asr_device, compute_type=s.asr_compute_type)
-        return _model
+            _models[key] = WhisperModel(key, device=s.asr_device, compute_type=s.asr_compute_type,
+                                        cpu_threads=s.asr_cpu_threads)
+        return _models[key]
 
 
 def _split_sentences(text: str, start: float, end: float) -> list[tuple[float, float, str]]:
@@ -71,10 +88,15 @@ def decode_audio(path: str, sr: int = 16000):
     return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
-def _run(audio, s: Settings, offset: float = 0.0) -> list[dict]:
-    segments, _ = get_model(s).transcribe(
+def _run(audio, s: Settings, offset: float = 0.0, model: str | None = None, context: str = "") -> list[dict]:
+    """Transkripsi satu potongan audio. `context` = kalimat terakhir blok sebelumnya, ditambahkan ke
+    prompt awal agar kalimat yang berlanjut antar-blok tetap nyambung."""
+    prompt = prompt_for(s)
+    if context:
+        prompt = f"{prompt or ''} {context[-200:]}".strip()
+    segments, _ = get_model(s, model).transcribe(
         audio, language="id", task="transcribe", beam_size=5, temperature=0.0,
-        initial_prompt=INITIAL_PROMPT, condition_on_previous_text=False,
+        initial_prompt=prompt or None, condition_on_previous_text=False,
         vad_filter=True, vad_parameters={"min_silence_duration_ms": 400})
     return [{"start": round(seg.start + offset, 2), "end": round(seg.end + offset, 2), "text": seg.text.strip()}
             for seg in segments if seg.text.strip()]
@@ -88,37 +110,74 @@ def _to_sentences(raw: list[dict], start_index: int = 0) -> list[dict]:
     return out
 
 
-def transcribe(path: str, s: Settings) -> tuple[list[dict], dict]:
+def transcribe(path: str, s: Settings, model: str | None = None) -> tuple[list[dict], dict]:
+    """Transkripsi utuh sekali jalan (dipakai untuk unggahan audio dan transkrip akhir)."""
+    name = model or s.asr_model
     audio = decode_audio(path)
-    return _to_sentences(_run(audio, s)), {"asr_model": s.asr_model, "duration_s": round(len(audio) / 16000, 1)}
+    return _to_sentences(_run(audio, s, model=name)), {"asr_model": name, "duration_s": round(len(audio) / 16000, 1)}
 
 
 MIN_NEW_AUDIO_S = 24.0   # Whisper selalu memproses jendela 30 dtk: putaran pendek boros CPU dan menumpuk antrean
-TAIL_GUARD_S = 1.5       # segmen yang berakhir dekat ujung bisa terpotong kata; tunda ke putaran berikut
+MIN_BLOCK_S = 15.0       # blok terpendek yang dikunci di tengah rekaman
+MAX_BLOCK_S = 45.0       # bila tidak ada jeda bicara, blok dipotong paksa agar transkrip tetap maju
+TAIL_GUARD_S = 1.5       # ujung audio bisa masih terpotong kata: jangan dipotong terlalu dekat ujung
+
+
+def _silence_cut(audio, offset: float, duration: float) -> float | None:
+    """Cari titik potong di jeda bicara terakhir antara offset+MIN_BLOCK_S dan ujung audio.
+
+    Memakai VAD Silero bawaan faster-whisper. None = belum ada jeda yang cocok (tunggu audio berikutnya).
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    lo, hi = offset + MIN_BLOCK_S, duration - TAIL_GUARD_S
+    if hi <= lo:
+        return None
+    window = audio[int(offset * 16000):int(hi * 16000)]
+    speech = get_speech_timestamps(window, VadOptions(min_silence_duration_ms=300))
+    if not speech:
+        return hi  # seluruhnya hening: aman dipotong
+    cuts = [offset + (a["end"] + b["start"]) / 2 / 16000 for a, b in zip(speech, speech[1:])]
+    last_end = offset + speech[-1]["end"] / 16000
+    if hi - last_end >= 0.3:  # sudah hening di ujung jendela
+        cuts.append(last_end + 0.15)
+    cuts = [c for c in cuts if lo <= c <= hi]
+    if cuts:
+        return max(cuts)
+    return hi if duration - offset >= MAX_BLOCK_S else None
+
+
+def incremental_step(audio, s: Settings, segments: list[dict], offset: float,
+                     final: bool) -> tuple[list[dict], float]:
+    """Satu putaran ASR bertahap pada audio yang sudah didekode. Audio diproses per blok tanpa tumpang
+    tindih: blok dipotong di jeda bicara sehingga tidak ada audio yang ditranskripsi dua kali."""
+    duration = len(audio) / 16000
+    if final:
+        cut = duration
+    elif duration - offset < MIN_NEW_AUDIO_S:
+        return segments, offset
+    else:
+        cut = _silence_cut(audio, offset, duration)
+        if cut is None:
+            return segments, offset
+    if cut - offset < 0.3:
+        return segments, max(offset, cut)
+    context = " ".join(seg["text"] for seg in segments[-3:])
+    raw = _run(audio[int(offset * 16000):int(cut * 16000)], s, offset=offset, context=context)
+    return segments + _to_sentences(raw, start_index=len(segments)), cut
 
 
 def transcribe_incremental(path: str, s: Settings, segments: list[dict], offset: float,
                            final: bool) -> tuple[list[dict], float, float]:
     """ASR selama rekaman berjalan.
 
-    Berkas webm terus bertambah (potongan MediaRecorder disambung). Setiap putaran hanya audio
-    setelah `offset` yang ditranskripsi. Segmen terakhir (yang mungkin masih terpotong kalimatnya)
-    tidak dikunci kecuali `final`, jadi ditranskripsi ulang di putaran berikutnya bersama lanjutannya.
+    Berkas webm terus bertambah (potongan MediaRecorder disambung). Setiap putaran mengunci satu blok
+    baru (di jeda bicara) setelah `offset`; saat `final`, sisa audio diproses sampai habis.
     Mengembalikan (segmen terkunci, offset baru, durasi audio sejauh ini).
     """
     audio = decode_audio(path)
-    duration = len(audio) / 16000
-    if not final and duration - offset < MIN_NEW_AUDIO_S:
-        return segments, offset, duration
-    raw = _run(audio[int(offset * 16000):], s, offset=offset)
-    if not final:
-        keep = [r for r in raw if r["end"] < duration - TAIL_GUARD_S]
-        raw = keep[:-1] if len(keep) == len(raw) and keep else keep
-        if raw:
-            offset = raw[-1]["end"]
-    else:
-        offset = duration
-    return segments + _to_sentences(raw, start_index=len(segments)), offset, duration
+    segs, new_offset = incremental_step(audio, s, segments, offset, final)
+    return segs, new_offset, len(audio) / 16000
 
 
 SPEAKER_PREFIX = re.compile(

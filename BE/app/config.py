@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     asr_model: str = "small"
     asr_device: str = "cpu"
     asr_compute_type: str = "int8"
+    asr_prompt: str = "dewasa"  # dewasa | anak | none (prompt awal Whisper)
+    # Thread CPU untuk Whisper. 0 = bawaan CTranslate2 (hanya sebagian inti); 8 terukur ±1,5x lebih cepat
+    # di i5-12450H (12 thread logis). Sisakan beberapa inti untuk server web dan OS.
+    asr_cpu_threads: int = 8
+    # Skema dua model: ASR_MODEL dipakai saat rekaman berjalan (transkrip live, harus cepat);
+    # ASR_FINAL_MODEL mentranskrip ulang seluruh audio setelah "Selesai" dan hasilnya yang dikirim ke LLM.
+    # Kosong = sama dengan ASR_MODEL (tanpa transkripsi ulang).
+    asr_final_model: str = ""
 
     llm_providers: str = "gemini"
     gemini_api_key: str = ""
@@ -50,6 +58,10 @@ class Settings(BaseSettings):
     @property
     def provider_list(self) -> list[str]:
         return [p.strip() for p in self.llm_providers.split(",") if p.strip()]
+
+    @property
+    def final_asr_model(self) -> str:
+        return self.asr_final_model.strip() or self.asr_model
 
     @property
     def allowed_origins(self) -> list[str]:

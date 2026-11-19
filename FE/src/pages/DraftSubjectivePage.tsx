@@ -12,10 +12,10 @@ import { mmss } from '@/lib/format'
 import type { Consultation, ExtractionField } from '@/lib/types'
 
 const statusLabel: Record<string, string> = {
-  recording: 'Merekam…', queued: 'Menyiapkan transkrip…', transcribing: 'Mentranskrip percakapan…',
+  recording: 'Merekam…', queued: 'Menyiapkan transkrip…', transcribing: 'Mentranskrip percakapan…', refining: 'Menyempurnakan transkrip…',
   extracting: 'Menyusun draf Subjektif…', coding: 'Menyusun usulan ICD-10…', done: 'Rekaman Tersimpan', failed: 'Pemrosesan gagal',
 }
-const PROCESSING = ['recording', 'queued', 'transcribing', 'extracting', 'coding']
+const PROCESSING = ['recording', 'queued', 'transcribing', 'refining', 'extracting', 'coding']
 
 /** Label tampilan bagian S (mengikuti desain); field kosong yang opsional disembunyikan. */
 const S_LABELS: [string, string, boolean][] = [

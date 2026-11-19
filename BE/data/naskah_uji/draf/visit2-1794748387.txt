@@ -1,0 +1,49 @@
+?: Selamat pagi pak.
+?: Monggo silahkan duduk dulu.
+?: Ada keluhan apa hari ini?
+?: Pak Gito, ini kepala saya sakit banget dari kemarin.
+?: Rasanya cenot-cenot terus katang sampai pusing kalau dibuat berdiri.
+?: Mulai kapan sakit kepalanya pak?
+?: Kalau nggak salah sejari minggu, Tok.
+?: Awalnya cuma sedikit.
+?: Tak kira karena tercapaian.
+?: Tapi makan kesini kok tanpa sakit?
+?: Sakitnya di bagian mana, depan, belakang, atau seluruh kepala, lebih sering di bagian depan sama blipistok, kadang sampai belakang kepala juga.
+?: Kalau sakitnya muncul, terus menerus atau hilang timbul, hilang timbul top, tapi kalau sorry biasanya tambah terasa.
+?: Apalagi kalau lihat layar HP atau laptop terlalu lama itu sakit.
+?: Akhir-akhir ini, aktivitasnya memang banyak di depan layar.
+?: Ya toh, saya kerja di tepan komputer hampir seharian, kadang sampai lupa istirahat.
+?: Tidurnya cukup nggak pak?
+?: Nah itu, beberapa hari ini tidur cuma 4-5 jam, banyak pekerjaan yang harus diselesaikan.
+?: Kalau makan dan minum bagaimana teratur?
+?: Kadang pelat sih pak, minum juga jarang, biasanya baru minum kalau sudah haus.
+?: Ada keluhan lain seperti mual, muntah, handangan kabur atau telinga berdenging?
+?: Kadang akamual, Tok.
+?: Tapi nggak sampai mutah.
+?: Padangan kabur nggak ada.
+?: Pernah mengalami sakit kepala seperti ini sebelumnya?
+?: Pernah, tapi nggak sebarah sekarang.
+?: Biasanya kalau tidur itu cukup langsung mendingan.
+?: Ada riwayat darah tinggi atau penyakit tertentu?
+?: Setahu saya nggak, Tok.
+?: Tapi bapak saya punya riwayat darah tinggi.
+?: baik, saya mau tanya satu hal lagi, apakah sakit kepalanya muncul mendadak dan sangat dibat seperti sakit kepala paling parah yang pernah dirasa kan?
+?: nggak Tok, awalnya pelan-pelan terus makin terasa
+?: oke, sekarang saya periksa dulu ya, coba duduk agak, saya akan cek tekanan daerah dan beberapa pemeriksaan sederhana
+?: Oke, Top.
+?: Sementara dari cerita Bapak, sakit kepala ini bisa berkaitan dengan kurang tidur, kelelahan, atau kurang cairan.
+?: Tapi kita perlu pemeriksaan dulu untuk memastikan penyebabnya.
+?: Berarti saya harus istirahat total ya, Top?
+?: Gak harus total, Pak.
+?: Tapi coba atur waktu istirahat tidak cukup, minum air yang cukup, dan jangan terlalu lama menatap layar tanpa judahnya.
+?: Kalau obatnya pake mana toh?
+?: Nanti kita sesuaikan setelah pemeriksaan dan memastikan obatnya aman untuk bapak.
+?: Kalau sakit kepala mendadak sangat debat,
+?: disertai kelemahan anggota tubuh,
+?: bicara pelo, pingsan, atau gengguan penglihatan,
+?: segera keigede ya.
+?: Iya toh.
+?: Berarti saya harus pulai kartu-pulai titur juga ya?
+?: Bedul pak.
+?: Kesehatan tetap harus diperhatikan,
+?: meskipun pekerjaan sedang banyak.

@@ -231,9 +231,11 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setError('Browser tidak mendukung perekaman. Gunakan pencatatan manual.'); return }
     try {
       await saved()
+      // noiseSuppression dimatikan: filter bawaan browser untuk video call sering memotong suku kata
+      // pelan dan membuat suara "robotik", sehingga merugikan Whisper. Echo cancellation tetap aktif.
       const audioConstraints: MediaTrackConstraints = {
         echoCancellation: true,
-        noiseSuppression: true,
+        noiseSuppression: false,
         ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
       }
       let media: MediaStream
@@ -241,7 +243,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
         media = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
       } catch (firstErr) {
         if (selectedDeviceId) {
-          media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+          media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false } })
         } else {
           throw firstErr
         }

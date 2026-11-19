@@ -1,0 +1,18 @@
+?: halo saya dokter
+?: apa kelohan anda hari ini
+?: saya sakit dok
+?: saya sakit kepala pusing sudah 3 hari
+?: muntah-muntah
+?: setiap setelah saya makan
+?: apakah ada obat yang sebelumnya bapak minum
+?: Ya, ada dogg.
+?: Untuk obatnya itu saya minum panadol pereda pusing.
+?: Oke, selain pusing dan mual apakah ada gejela lain, Bepak?
+?: Saya suka buram, mata saya suka buram, keliatannya kadang kalau pusin itu tidak jelas.
+?: Apakah ada lagi?
+?: Tidak ada.
+?: Ini sudah berlangsung berapa lama ya Bapak?
+?: Untuk pusinnya saya sudah berlangsung 7 hari.
+?: Jadi namun, untuk mual-mualnya, muntah-muntahnya, ini sudah berlangsung tiga hari, Pak.
+?: Oke, baik.
+?: Sekarang saya cek untuk fisiknya, ya, Bapak.

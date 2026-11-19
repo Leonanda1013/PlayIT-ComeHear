@@ -1,0 +1,33 @@
+?: Selamat pagi Bapak, silahkan duduk, perkenalkan saya Dokter Rian yang bertugas di klinik hari ini.
+?: Benar Bapak Aris, usia 45 tahun.
+?: Selamat pagi Dokter, iya benar, saya Aris.
+?: Baik, Pak Aris, alamat tinggalnya dimana ya dan sehari-hari kesibukannya apa, Pak?
+?: Saya tinggal di calon Mertecah No.
+?: 12 Tok, kerja sehari-hari sebagai staf administrasi kantor.
+?: Oke, ada keluhan apa yang membuat Bapak datang ke klinik hari ini?
+?: Ini Tok, saya patuk-patuk sudah tak lama, tidak sembuh-sembuh.
+?: Sudah berapa lama batunya terasa Pak, lalu batunya kering atau berdaha?
+?: Kira-kira sudah 3 minggu sih Tok, batunya berdaha, laranya putih kekuningan.
+?: Apakah batunya muncul terus menerus panjang hari atau paling parah di waktu-waktu tentu saja, Pak?
+?: Biasanya paling sering dan rasa berat itu malam menjalang pagi sih, Doc.
+?: Sampai sering terbangun, Doc.
+?: Selain batu dan berdaha, apakah ada gejala lain seperti demam, sessana fas atau keringat malam hari?
+?: kalau demam sih gak ada ya toh
+?: tapi dadai tuh rasanya agak berat kalau pas batunya udah kampu
+?: berat badan saya juga agak turun
+?: sebulan ini karena kurang nafsu makan sih
+?: baik sebelumnya apakah bapak pernah mengalami sakit seperti ini
+?: atau mungkin ada riwayat asma atau alergi
+?: belum pernah sewaktu ini toh
+?: asmat kita ada
+?: tapi kalau udara terlalu tinggi tuh saya emang bersing-bersing ton
+?: di keluarga atau lingkungan kerja
+?: Apakah ada yang sedang mengalami gejala batu lama atau sedang mengobatan paru?
+?: Kebetulan teman satu ruangan di kantor, ada yang padu-padu juga otok.
+?: Apakah Bapak merokok?
+?: Iya dok, saya merokok sekitar setengah sebungkus hari.
+?: Baik Pak Ari, saya data ulang ya.
+?: Bapak batu berdaha kuning selama 3 minggu
+?: memberat pada malam hari ada keluhan dada, terasa berat dan penurunan nafsu makan, serta ada riwayat merokok.
+?: Setelah ini kita lakukan pemeriksaan fisik dulu ya Pak, untuk memastikan kondisi paru-paru Bapak.
+?: Baik, siap dong.

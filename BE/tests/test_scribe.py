@@ -86,31 +86,44 @@ def test_pipeline_text_to_draft_with_mock(session_factory, db, visit_with_note, 
         assert "sumer" in v.note.subjective["keluhan_utama"]
 
 
-def test_incremental_asr_holds_back_tail_and_finishes(monkeypatch, settings):
+def test_incremental_asr_cuts_at_pauses_without_overlap(monkeypatch, settings):
     import numpy as np
 
     from app.scribe import asr
     audio = {"len": 30.0}
     monkeypatch.setattr(asr, "decode_audio", lambda path: np.zeros(int(audio["len"] * 16000), dtype=np.float32))
+    calls = []
 
-    def fake_run(chunk, s, offset=0.0):
+    def fake_run(chunk, s, offset=0.0, model=None, context=""):
         end = offset + len(chunk) / 16000
+        calls.append((offset, round(end, 2)))
         t, out = offset, []
         while t + 4 <= end:
             out.append({"start": t, "end": t + 4, "text": f"kalimat {int(t)}."})
             t += 4
         return out
     monkeypatch.setattr(asr, "_run", fake_run)
+    monkeypatch.setattr(asr, "_silence_cut", lambda audio_, offset, duration: 20.0)
 
     segs, off, dur = asr.transcribe_incremental("x", settings, [], 0.0, final=False)
-    assert dur == 30.0 and off == 24.0  # segmen 24-28 bisa berlanjut di ujung audio: ditunda
-    assert [s["i"] for s in segs] == [0, 1, 2, 3, 4, 5]
+    assert dur == 30.0 and off == 20.0  # blok dikunci di jeda bicara (detik 20)
+    assert [s["i"] for s in segs] == [0, 1, 2, 3, 4]
     audio["len"] = 40.0
     same, off2, _ = asr.transcribe_incremental("x", settings, segs, off, final=False)
-    assert same == segs and off2 == off  # belum cukup audio baru
+    assert same == segs and off2 == off  # baru 20 dtk audio baru: belum diproses
     final, off3, _ = asr.transcribe_incremental("x", settings, segs, off, final=True)
     assert off3 == 40.0 and [s["text"] for s in final][-2:] == ["kalimat 32.", "kalimat 36."]
     assert [s["i"] for s in final] == list(range(len(final)))
+    assert calls == [(0.0, 20.0), (20.0, 40.0)]  # tidak ada audio yang diproses dua kali
+
+
+def test_silence_cut_on_silent_audio(settings):
+    import numpy as np
+
+    from app.scribe import asr
+    silent = np.zeros(30 * 16000, dtype=np.float32)
+    assert asr._silence_cut(silent, 0.0, 30.0) == 30.0 - asr.TAIL_GUARD_S
+    assert asr._silence_cut(silent, 0.0, 10.0) is None  # blok terlalu pendek
 
 
 def test_live_path_persists_speaker_labels(session_factory, db, visit_with_note, settings):
@@ -132,6 +145,38 @@ def test_live_path_persists_speaker_labels(session_factory, db, visit_with_note,
         got = s.get(ScribeSession, ss.id)
         assert got.status == "done", got.error
         assert [x["speaker"] for x in got.transcript] == ["doctor", "guardian"]
+
+
+def test_two_model_scheme_refines_with_final_model(session_factory, db, visit_with_note, settings):
+    """Skema dua model: transkrip live (model cepat) diganti transkripsi ulang model akhir sebelum ke LLM."""
+    live = [{"i": 0, "start": 0.0, "end": 2.0, "speaker": None, "text": "patut patut berdaha"}]
+    ss = ScribeSession(visit_id=visit_with_note.id, status="queued", audio_path="x.webm", transcript=live,
+                       model_info={"live": {"offset": 2.0, "asr_s": 1.0}})
+    db.add(ss)
+    db.commit()
+    s2 = settings.model_copy(update={"asr_model": "small", "asr_final_model": "large-v3-turbo"})
+    import app.scribe.pipeline as pl
+    calls = []
+
+    def fake_transcribe(path, s, model=None):
+        calls.append(model)
+        return ([{"i": 0, "start": 0.0, "end": 2.0, "speaker": None, "text": "Keluhannya apa Bu?"},
+                 {"i": 1, "start": 2.0, "end": 5.0, "speaker": None, "text": "Batuk berdahak, anak saya demam tiga hari Dok."}],
+                {"asr_model": model, "duration_s": 5.0})
+    orig_t, orig_i = pl.asr.transcribe, pl.asr.transcribe_incremental
+    pl.asr.transcribe = fake_transcribe
+    pl.asr.transcribe_incremental = lambda *a, **k: pytest.fail("ekor transkrip live tidak perlu diproses bila ada model akhir")
+    try:
+        run_session(session_factory, ss.id, s2)
+    finally:
+        pl.asr.transcribe, pl.asr.transcribe_incremental = orig_t, orig_i
+    assert calls == ["large-v3-turbo"]
+    with session_factory() as s:
+        got = s.get(ScribeSession, ss.id)
+        assert got.status == "done", got.error
+        assert "berdahak" in " ".join(x["text"] for x in got.transcript)
+        assert got.model_info["asr_model"] == "large-v3-turbo" and got.model_info["asr_live_model"] == "small"
+        assert "asr_refine_s" in got.timings
 
 
 def test_postprocess_four_mandatory_filters(settings):

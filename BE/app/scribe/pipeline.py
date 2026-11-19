@@ -87,12 +87,24 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
                 segments = asr.parse_text_transcript(text_transcript)
                 models["asr_model"] = "teks"
             elif ss.model_info and ss.model_info.get("live"):
-                _asr_step(ss, settings, final=True)  # hanya sisa audio setelah potongan terakhir
-                segments = ss.transcript
-                models.update({k: v for k, v in ss.model_info.items() if k != "live"})
                 timings["asr_live_s"] = ss.model_info["live"]["asr_s"]
+                if settings.final_asr_model != settings.asr_model:
+                    # Skema dua model: transkrip live (model cepat) hanya untuk tampilan selama rekaman.
+                    # Seluruh audio ditranskrip ulang dengan model akhir yang lebih akurat; hasil inilah
+                    # yang dikirim ke LLM dan disimpan sebagai bukti kutipan.
+                    t = step("refining")
+                    segments, info = asr.transcribe(ss.audio_path, settings, model=settings.final_asr_model)
+                    models.update(info)
+                    models["asr_live_model"] = settings.asr_model
+                    timings["asr_refine_s"] = round(time.perf_counter() - t, 1)
+                    ss.transcript = segments
+                    db.commit()
+                else:
+                    _asr_step(ss, settings, final=True)  # hanya sisa audio setelah potongan terakhir
+                    segments = ss.transcript
+                    models.update({k: v for k, v in ss.model_info.items() if k != "live"})
             else:
-                segments, info = asr.transcribe(ss.audio_path, settings)
+                segments, info = asr.transcribe(ss.audio_path, settings, model=settings.final_asr_model)
                 models.update(info)
             timings["asr_s"] = round(time.perf_counter() - t, 1)
             if not segments:
@@ -216,3 +228,5 @@ def warm_up(settings: Settings) -> None:
     """Muat model ASR saat server menyala, bukan saat rekaman pertama (±13 detik)."""
     if settings.asr_model:
         executor.submit(asr.get_model, settings)
+        if settings.final_asr_model != settings.asr_model:
+            executor.submit(asr.get_model, settings, settings.final_asr_model)

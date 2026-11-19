@@ -340,7 +340,7 @@ def draft_label(v: Visit, state: str) -> tuple[str, str]:
     if state == "selesai":
         return "Tersimpan", "ok"
     ss = _review_session(v)
-    if ss and ss.status in ("recording", "queued", "transcribing", "extracting"):
+    if ss and ss.status in ("recording", "queued", "transcribing", "refining", "extracting"):
         return "Menyusun draf", "primary"
     if (ss and ss.extraction) or (v.note and (v.note.subjective_summary or v.note.vitals)):
         return "Draf tersimpan", "primary"
