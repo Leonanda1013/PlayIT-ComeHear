@@ -888,6 +888,7 @@ def scribe_state(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clini
         "error": failed.error if failed and not ss else None,
         "n_segments": len(ss.transcript or []) if ss else 0,
         "transcript": ss.transcript or [] if ss else [],
+        "extraction": ss.extraction if ss else None,
         "summary": v.note.subjective_summary if v.note and ss and ss.extraction else None,
         "fields": dict(v.note.subjective or {}) if v.note and ss and ss.extraction else None,
         "duration_s": (ss.model_info or {}).get("duration_s") if ss else None,

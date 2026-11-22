@@ -52,7 +52,24 @@ export type QueueResponse = {
 }
 
 export type TranscriptSegment = { i?: number; start: number | null; end: number | null; speaker?: string | null; text: string }
-export type ExtractionField = { nilai: string | null; kutipan?: string | null; status: string; source_ids?: number[]; alasan_ambigu?: string | null; grounding?: number | null }
+export type SegmentCitation = {
+  i: number
+  speaker?: string | null
+  text: string
+  start?: number | null
+  end?: number | null
+  kutipan?: string | null
+  skor?: number
+}
+export type ExtractionField = {
+  nilai: string | null
+  kutipan?: string | null
+  status: string
+  source_ids?: number[]
+  alasan_ambigu?: string | null
+  grounding?: number | null
+  sitasi?: SegmentCitation[]
+}
 export type IcdSuggestion = { code: string; display: string; keyakinan?: number; deskripsi_id?: string; alasan?: string }
 export type IcdSuggestionsResult = {
   utama: IcdSuggestion[]
@@ -97,6 +114,7 @@ export type Consultation = {
 
 export type ScribeState = {
   status: string | null; error: string | null; transcript: TranscriptSegment[]
+  extraction?: Record<string, ExtractionField | string | unknown> | null
   summary: string | null; fields: Record<string, string> | null
   icd: IcdSuggestionsResult | IcdSuggestion[] | null; duration_s: number | null
 }

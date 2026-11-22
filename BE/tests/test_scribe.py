@@ -352,3 +352,65 @@ def test_background_trigger_suggest_icd_on_save_soap(db, doctor, visit_with_note
         app.dependency_overrides.clear()
 
 
+def test_grounding_citations_and_verification():
+    from app.scribe.extract import ground
+
+    segmen = [
+        {"i": 0, "speaker": "doctor", "text": "Selamat siang Bu, keluhannya apa?", "start": 0.0, "end": 2.5},
+        {"i": 1, "speaker": "guardian", "text": "Ini Raka demam tinggi sejak kemarin pagi Dok, sama pusing.", "start": 2.5, "end": 7.0},
+        {"i": 2, "speaker": "doctor", "text": "Ada alergi obat atau makanan?", "start": 7.0, "end": 9.5},
+        {"i": 3, "speaker": "guardian", "text": "Alergi obat nggak ada, tapi kalau makan udang gatal-gatal.", "start": 9.5, "end": 14.0},
+    ]
+    data = {
+        "keluhan_utama": {
+            "nilai": "Demam tinggi sejak kemarin pagi disertai pusing",
+            "source_ids": [0],  # Salah indeks (0 adalah dokter), harus dikoreksi otomatis ke [1]
+            "kutipan": "demam tinggi sejak kemarin pagi Dok, sama pusing",
+            "status": "jelas",
+            "alasan_ambigu": None,
+        },
+        "riwayat_penyakit_sekarang": {
+            "nilai": "Halusinasi nyeri dada hebat",
+            "source_ids": [1],
+            "kutipan": "dada saya sakit sekali seperti ditekan",  # Tidak ada di transkrip -> turun ke ambigu
+            "status": "jelas",
+            "alasan_ambigu": None,
+        },
+        "riwayat_alergi": {
+            "nilai": "Alergi makanan (udang: gatal-gatal), alergi obat disangkal",
+            "source_ids": [3],
+            "kutipan": "kalau makan udang gatal-gatal",
+            "status": "jelas",
+            "alasan_ambigu": None,
+        },
+        "alergi_terstruktur": [
+            {"zat": "udang", "kategori": "food", "reaksi": "gatal-gatal", "kepastian": "confirmed", "source_ids": [3]}
+        ],
+    }
+    peringatan = []
+    hasil = ground(data, segmen, peringatan)
+
+    # 1. Keluhan utama: source_ids dikoreksi ke [1], grounding 1.0, sitasi lengkap
+    ku = hasil["keluhan_utama"]
+    assert ku["source_ids"] == [1]
+    assert ku["grounding"] == 1.0
+    assert ku["status"] == "jelas"
+    assert len(ku["sitasi"]) == 1
+    assert ku["sitasi"][0]["i"] == 1
+    assert ku["sitasi"][0]["speaker"] == "guardian"
+    assert ku["sitasi"][0]["kutipan"] == "demam tinggi sejak kemarin pagi Dok, sama pusing"
+
+    # 2. RPS halusinasi: grounding gagal -> status diturunkan ke ambigu
+    rps = hasil["riwayat_penyakit_sekarang"]
+    assert rps["grounding"] < 0.8
+    assert rps["status"] == "ambigu"
+    assert rps["alasan_ambigu"] is not None
+
+    # 3. Alergi terstruktur memiliki sitasi & kutipan
+    al = hasil["alergi_terstruktur"][0]
+    assert al["source_ids"] == [3]
+    assert len(al["sitasi"]) == 1
+    assert "udang" in al["kutipan"]
+
+
+

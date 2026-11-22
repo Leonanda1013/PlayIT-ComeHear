@@ -260,11 +260,23 @@ def _liputan(kutipan_n: str, sumber_n: str, min_blok: int = 4) -> float:
     return cocok / len(kutipan_n)
 
 
+def _cari_kutipan_di_teks(kutipan: str, teks_segmen: str) -> str | None:
+    """Cari rentang substring asli di dalam teks_segmen yang cocok dengan kutipan."""
+    if not kutipan or not teks_segmen:
+        return None
+    k_clean = kutipan.strip()
+    idx = teks_segmen.lower().find(k_clean.lower())
+    if idx != -1:
+        return teks_segmen[idx: idx + len(k_clean)]
+    return None
+
+
 def ground(data: dict | BaseModel, segmen: list[dict], peringatan: Optional[list] = None) -> dict:
     """Periksa tiap field S: source_ids valid, kutipan ada di segmen sumber. Gagal -> status ambigu."""
     if isinstance(data, BaseModel):
         data = data.model_dump(mode="json")
     peringatan = peringatan if peringatan is not None else []
+    seg_by_i = {s["i"]: s for s in segmen}
     teks = {s["i"]: s["text"] for s in segmen}
     norm = {i: _norm(t) for i, t in teks.items()}
 
@@ -275,7 +287,7 @@ def ground(data: dict | BaseModel, segmen: list[dict], peringatan: Optional[list
         f["source_ids"] = sorted({i for i in f.get("source_ids", []) if i in teks})
         if f.get("status") == FieldStatus.tidak_ditemukan.value or not f.get("nilai"):
             f.update(nilai=None, kutipan=None, source_ids=[], alasan_ambigu=None,
-                     status=FieldStatus.tidak_ditemukan.value, grounding=None)
+                     status=FieldStatus.tidak_ditemukan.value, grounding=None, sitasi=[])
             continue
         kut = _norm(f.get("kutipan") or "")
         skor = _liputan(kut, _norm(" ".join(teks[i] for i in f["source_ids"])))
@@ -292,11 +304,40 @@ def ground(data: dict | BaseModel, segmen: list[dict], peringatan: Optional[list
         elif f.get("status") == FieldStatus.jelas.value:
             f["alasan_ambigu"] = None
 
+        sitasi = []
+        for i in f["source_ids"]:
+            s_obj = seg_by_i[i]
+            seg_text = s_obj.get("text") or ""
+            lip = _liputan(kut, norm[i]) if kut else 0.0
+            exact_span = _cari_kutipan_di_teks(f.get("kutipan") or "", seg_text)
+            sitasi.append({
+                "i": i,
+                "speaker": s_obj.get("speaker"),
+                "text": seg_text,
+                "start": s_obj.get("start"),
+                "end": s_obj.get("end"),
+                "kutipan": exact_span or (f.get("kutipan") if lip >= AMBANG_GROUNDING else None),
+                "skor": round(lip, 2),
+            })
+        f["sitasi"] = sitasi
+
     for a in data.get("alergi_terstruktur", []):
         a["source_ids"] = sorted({i for i in a.get("source_ids", []) if i in teks})
         if not a["source_ids"] and a.get("kepastian") == "confirmed":
             a["kepastian"] = "unconfirmed"
             peringatan.append(f"Alergi '{a.get('zat')}' tanpa segmen sumber valid; diturunkan ke unconfirmed.")
+        a["sitasi"] = [
+            {
+                "i": i,
+                "speaker": seg_by_i[i].get("speaker"),
+                "text": seg_by_i[i].get("text") or "",
+                "start": seg_by_i[i].get("start"),
+                "end": seg_by_i[i].get("end"),
+            }
+            for i in a["source_ids"]
+        ]
+        if not a.get("kutipan") and a["source_ids"]:
+            a["kutipan"] = teks[a["source_ids"][0]]
     return data
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, AudioLines, Check, LoaderCircle, Mic, Pause, Play } from 'lucide-react'
+import { AlertTriangle, AudioLines, Check, CheckCircle2, LoaderCircle, Mic, Pause, Play, Quote, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble } from '@/components/Scribe'
@@ -62,9 +62,60 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const draftFields = dirty ? fields : { ...fields, ...(scribe.data?.fields || {}) }
   const draftSummary = dirty ? summary : scribe.data?.summary || summary
   const transcript = scribe.data?.transcript?.length ? scribe.data.transcript : data.session?.transcript || []
-  const extraction = (data.session?.extraction || {}) as Record<string, ExtractionField | string>
+  const extraction = (scribe.data?.extraction || data.session?.extraction || {}) as Record<string, ExtractionField | string | unknown>
   const processing = PROCESSING.includes(status)
   const failed = status === 'failed' || (!data.session && !!data.failed_session)
+
+  const [activeCitation, setActiveCitation] = useState<{
+    fieldKey: string
+    fieldLabel: string
+    segmentIds: number[]
+    quote?: string | null
+  } | null>(null)
+
+  // Peta indeks segmen -> daftar label field Subjektif yang mengutip segmen tersebut
+  const citationsBySegment: Record<number, string[]> = {}
+  const firstFieldBySegment: Record<number, { key: string; label: string; ids: number[]; quote?: string | null }> = {}
+  for (const [key, label] of S_LABELS) {
+    const meta = typeof extraction[key] === 'object' && extraction[key] !== null ? (extraction[key] as ExtractionField) : null
+    const sids = meta?.source_ids || []
+    for (const sid of sids) {
+      if (!citationsBySegment[sid]) citationsBySegment[sid] = []
+      if (!citationsBySegment[sid].includes(label)) citationsBySegment[sid].push(label)
+      if (!firstFieldBySegment[sid]) {
+        firstFieldBySegment[sid] = { key, label, ids: sids, quote: meta?.kutipan }
+      }
+    }
+  }
+
+  const deniedSymptoms = Array.isArray(extraction.gejala_disangkal)
+    ? (extraction.gejala_disangkal as string[]).filter(Boolean)
+    : []
+
+  function focusCitation(
+    fieldKey: string,
+    fieldLabel: string,
+    segmentIds: number[],
+    quote?: string | null,
+    targetSegId?: number,
+  ) {
+    if (
+      activeCitation?.fieldKey === fieldKey &&
+      targetSegId === undefined &&
+      activeCitation.segmentIds.join(',') === segmentIds.join(',')
+    ) {
+      setActiveCitation(null)
+      return
+    }
+    setActiveCitation({ fieldKey, fieldLabel, segmentIds, quote })
+    const scrollTarget = targetSegId ?? segmentIds[0]
+    if (scrollTarget !== undefined) {
+      const el = document.getElementById(`transcript-seg-${scrollTarget}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+  }
 
   function onDecide(decision: 'setuju' | 'tolak', customGiver?: string, customRel?: string) {
     decide(decision, customGiver, customRel)
@@ -145,28 +196,155 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
 
     <div className="grid items-start gap-[25px] xl:grid-cols-[592fr_486fr]">
       <section className="rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-5 pb-5 pt-[19px]">
-        <div className="flex items-center justify-between gap-3"><h2 className="text-[20px] font-bold text-ch-ink">Transkrip Percakapan</h2><span className="inline-flex h-[30px] items-center rounded-full border border-[#cfdbe2] bg-[#edf2f5] px-3 text-[13px] font-semibold text-[#4b5f70]">Transkrip sesi</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-[20px] font-bold text-ch-ink">Transkrip Percakapan</h2>
+          <span className="inline-flex h-[30px] items-center rounded-full border border-[#cfdbe2] bg-[#edf2f5] px-3 text-[13px] font-semibold text-[#4b5f70]">Transkrip sesi</span>
+        </div>
+        {activeCitation && (
+          <div className="mt-3 flex items-center justify-between gap-2 rounded-[10px] border border-[#8fd6e1] bg-[#dff4f7] px-3 py-2 text-[12px] text-[#086775]">
+            <span className="flex items-center gap-1.5 font-medium">
+              <Quote className="size-3.5 shrink-0 text-[#0b6e7d]" />
+              Menyorot bukti sitasi untuk <b className="font-bold">{activeCitation.fieldLabel}</b> ({activeCitation.segmentIds.map((sid) => `[${sid}]`).join(', ')})
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveCitation(null)}
+              className="inline-flex items-center gap-1 rounded-[6px] border border-[#8fd6e1] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#0b6e7d] hover:bg-[#eef9fb]"
+            >
+              <X className="size-3" /> Reset
+            </button>
+          </div>
+        )}
         {processing && !transcript.length && <p role="status" className="mt-4 flex items-center gap-2 rounded-[10px] bg-[#eef6f8] p-3 text-[13px] text-[#53697b]"><LoaderCircle className="size-4 animate-spin text-ch-brand" /> {statusLabel[status]}</p>}
-        {transcript.length ? <div className="mt-4 space-y-3">{transcript.map((segment, index) => <TranscriptBubble key={segment.i ?? index} segment={segment} patientName={data.visit.patient.name} doctorName={data.visit.doctor} />)}</div>
-          : !processing && <div className="mt-4 grid min-h-[260px] place-items-center rounded-[12px] border border-dashed border-[#d6e1e7] text-center"><div><AudioLines className="mx-auto size-8 text-[#9badbf]" /><p className="mt-3 text-[13px] font-semibold text-[#2f4053]">{failed ? 'Transkrip gagal disusun' : 'Transkrip belum tersedia'}</p>{failed && <p className="mt-1 px-6 text-[12px] text-ch-muted">{data.failed_session?.error || scribe.data?.error}</p>}</div></div>}
+        {transcript.length ? (
+          <div className="mt-4 space-y-3">
+            {transcript.map((segment, index) => {
+              const segIdx = segment.i ?? index
+              const isHighlighted = Boolean(activeCitation?.segmentIds.includes(segIdx))
+              const citedFields = citationsBySegment[segIdx] || []
+              const firstCitation = firstFieldBySegment[segIdx]
+              return (
+                <TranscriptBubble
+                  key={segIdx}
+                  segment={{ ...segment, i: segIdx }}
+                  patientName={data.visit.patient.name}
+                  doctorName={data.visit.doctor}
+                  highlighted={isHighlighted}
+                  highlightQuote={isHighlighted ? activeCitation?.quote : null}
+                  citedFields={citedFields}
+                  onClick={
+                    firstCitation
+                      ? () => focusCitation(firstCitation.key, firstCitation.label, firstCitation.ids, firstCitation.quote)
+                      : undefined
+                  }
+                />
+              )
+            })}
+          </div>
+        ) : !processing && <div className="mt-4 grid min-h-[260px] place-items-center rounded-[12px] border border-dashed border-[#d6e1e7] text-center"><div><AudioLines className="mx-auto size-8 text-[#9badbf]" /><p className="mt-3 text-[13px] font-semibold text-[#2f4053]">{failed ? 'Transkrip gagal disusun' : 'Transkrip belum tersedia'}</p>{failed && <p className="mt-1 px-6 text-[12px] text-ch-muted">{data.failed_session?.error || scribe.data?.error}</p>}</div></div>}
       </section>
 
       <section className="rounded-[16px] border border-ch-brand bg-[#fbfdfe] px-4 pb-[19px] pt-[22px]">
-        <div className="flex items-center justify-between gap-3"><h2 className="text-[20px] font-bold text-ch-ink">Subjektif</h2><span className="inline-flex h-[30px] items-center rounded-full border border-[#8fd6e1] bg-[#dff4f7] px-3 text-[13px] font-semibold text-[#0b6e7d]">Draf AI</span></div>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[20px] font-bold text-ch-ink">Subjektif</h2>
+          <span className="inline-flex h-[30px] items-center rounded-full border border-[#8fd6e1] bg-[#dff4f7] px-3 text-[13px] font-semibold text-[#0b6e7d]">Draf AI • Grounded</span>
+        </div>
         {processing && <p role="status" className="mt-3 flex items-center gap-2 rounded-[8px] bg-[#eef6f8] p-2.5 text-[12px] text-[#53697b]"><LoaderCircle className="size-4 animate-spin text-ch-brand" /> {statusLabel[status]}</p>}
-        <div className="mt-[18px] space-y-[13px]">
+        <div className="mt-[18px] space-y-[14px]">
           {S_LABELS.filter(([key, , always]) => always || draftFields[key]).map(([key, label]) => {
-            const meta = typeof extraction[key] === 'object' ? extraction[key] as ExtractionField : null
+            const meta = typeof extraction[key] === 'object' && extraction[key] !== null ? (extraction[key] as ExtractionField) : null
             const ambiguous = !dirty && meta?.status === 'ambigu'
-            return <div key={key}>
-              <p className="mb-[7px] text-[9px] font-semibold uppercase leading-3 tracking-[0.04em] text-[#5f7284]">{label}</p>
+            const sourceIds = meta?.source_ids || []
+            const quoteText = meta?.kutipan || (meta?.sitasi?.[0]?.text ?? null)
+            const groundingScore = typeof meta?.grounding === 'number' ? Math.round(meta.grounding * 100) : null
+            const isFieldActive = activeCitation?.fieldKey === key
+
+            return <div
+              key={key}
+              className={`rounded-[10px] transition-colors ${isFieldActive ? 'bg-[#eef9fb] p-2 -mx-2 ring-1 ring-[#8fd6e1]' : ''}`}
+            >
+              <div className="mb-[7px] flex flex-wrap items-center justify-between gap-1.5">
+                <p className="text-[9px] font-semibold uppercase leading-3 tracking-[0.04em] text-[#5f7284]">{label}</p>
+                {!dirty && (sourceIds.length > 0 || groundingScore !== null) && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    {groundingScore !== null && (
+                      <span
+                        title={`Skor verifikasi bukti kutipan terhadap transkrip: ${groundingScore}%`}
+                        className={`inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[9px] font-semibold ${
+                          ambiguous || groundingScore < 80
+                            ? 'border-[#f0d08a] bg-[#fff8e6] text-[#8a6100]'
+                            : 'border-[#9adbe5] bg-[#e6f7f9] text-[#086775]'
+                        }`}
+                      >
+                        <CheckCircle2 className="size-2.5" />
+                        {groundingScore}%
+                      </span>
+                    )}
+                    {sourceIds.map((sid) => {
+                      const isSegActive = isFieldActive && activeCitation?.segmentIds.includes(sid)
+                      return (
+                        <button
+                          key={sid}
+                          type="button"
+                          onClick={() => focusCitation(key, label, sourceIds, quoteText, sid)}
+                          title={`Klik untuk menyorot Segmen [${sid}] di Transkrip Percakapan`}
+                          className={`inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 font-inter text-[10px] font-bold transition-colors ${
+                            isSegActive
+                              ? 'border-[#0b6e7d] bg-[#0b6e7d] text-white'
+                              : 'border-[#8fd6e1] bg-[#dff4f7] text-[#0b6e7d] hover:bg-[#c5ecf2]'
+                          }`}
+                        >
+                          <Quote className="size-2.5" /> [{sid}]
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
               {editing ? <TextArea rows={2} value={draftFields[key] || ''} onChange={(event) => edit(key, event.target.value)} className="rounded-[8px] px-2 py-2 text-[12px] leading-[18px]" />
-                : <p className={`min-h-[33px] rounded-[8px] border px-2 py-[7px] text-[12px] leading-[18px] ${ambiguous ? 'border-[#f0d08a] bg-ch-warn-soft text-[#5a4300]' : 'border-[#dce6eb] bg-white text-ch-ink'}`}>{draftFields[key] || <span className="text-ch-faint">Tidak dibahas dalam percakapan.</span>}</p>}
+                : <p className={`min-h-[33px] rounded-[8px] border px-2.5 py-[7px] text-[12px] leading-[18px] ${ambiguous ? 'border-[#f0d08a] bg-ch-warn-soft text-[#5a4300]' : 'border-[#dce6eb] bg-white text-ch-ink'}`}>{draftFields[key] || <span className="text-ch-faint">Tidak dibahas dalam percakapan.</span>}</p>}
+              {!editing && !dirty && quoteText && (
+                <button
+                  type="button"
+                  onClick={() => focusCitation(key, label, sourceIds, quoteText)}
+                  className={`mt-1.5 flex w-full items-start gap-1.5 rounded-[7px] border px-2.5 py-1.5 text-left text-[11px] leading-[15px] transition-colors ${
+                    isFieldActive
+                      ? 'border-[#5cc9d8] bg-[#dff4f7] text-[#075461]'
+                      : 'border-[#e1ecf0] bg-[#f4f9fb] text-[#4a6073] hover:border-[#9adbe5] hover:bg-[#eaf6f9]'
+                  }`}
+                >
+                  <Quote className="mt-0.5 size-3 shrink-0 text-[#0b8597]" />
+                  <span className="min-w-0 flex-1">
+                    <span className="font-semibold text-[#0b6e7d]">
+                      Sitasi {sourceIds.length ? `Segmen ${sourceIds.map((s) => `[${s}]`).join(', ')}` : 'Transkrip'}:
+                    </span>{' '}
+                    <span className="italic">“{quoteText}”</span>
+                  </span>
+                </button>
+              )}
               {ambiguous && <p className="mt-1 flex items-start gap-1 text-[10px] text-ch-warn"><AlertTriangle className="mt-0.5 size-3 shrink-0" /> Perlu dicek: {meta?.alasan_ambigu || 'jawaban pasien ragu-ragu.'}</p>}
             </div>
           })}
+
+          {deniedSymptoms.length > 0 && (
+            <div className="pt-1">
+              <p className="mb-[7px] text-[9px] font-semibold uppercase leading-3 tracking-[0.04em] text-[#5f7284]">
+                Gejala yang Disangkal (Pertinent Negatives)
+              </p>
+              <div className="flex flex-wrap gap-1.5 rounded-[8px] border border-[#dce6eb] bg-white px-2.5 py-2">
+                {deniedSymptoms.map((symptom) => (
+                  <span
+                    key={symptom}
+                    className="inline-flex items-center rounded-full border border-[#d0dfe6] bg-[#f0f5f8] px-2.5 py-0.5 text-[11px] font-medium text-[#3d5266]"
+                  >
+                    ✕ {symptom} (disangkal)
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-        <div className="mt-[13px] flex items-center justify-center gap-14">
+        <div className="mt-[15px] flex items-center justify-center gap-14">
           <button type="button" className="inline-flex h-9 min-w-[127px] items-center justify-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand disabled:opacity-50" onClick={() => setEditing(!editing)} disabled={processing}>{editing && <Check className="size-4" />}{editing ? 'Selesai edit' : 'Edit rangkuman'}</button>
           <button type="button" className="inline-flex h-9 min-w-[140px] items-center justify-center rounded-[8px] bg-ch-brand px-4 text-[14px] font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50" disabled={busy || processing} onClick={saveAndContinue}>{busy ? 'Menyimpan…' : 'Lanjut ke Objektif'}</button>
         </div>
