@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     clinic_license: str = "445/018/K-PRATAMA/DPMPTSP/2023"
     clinic_faskes_code: str = "317101234"
 
-    asr_model: str = "small"
+    asr_model: str = "large-v3-turbo"
     asr_device: str = "cpu"
     asr_compute_type: str = "int8"
     asr_prompt: str = "dewasa"  # dewasa | anak | none (prompt awal Whisper)

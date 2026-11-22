@@ -413,4 +413,22 @@ def test_grounding_citations_and_verification():
     assert "udang" in al["kutipan"]
 
 
+def test_clean_clinical_transcript_corrections():
+    from app.scribe.asr import clean_clinical_transcript
+    assert "duduk dulu" in clean_clinical_transcript("silakan tutu-tulu dog")
+    assert "dok" in clean_clinical_transcript("silakan duduk dulu dog")
+    assert "lendir" in clean_clinical_transcript("ada lentir")
+    assert "diare" in clean_clinical_transcript("ada tiare")
+    assert "BAB-nya" in clean_clinical_transcript("bagaimana Gabrinya?")
+    assert "pada BAB" in clean_clinical_transcript("darah patah BAP")
+    assert "seblak pedas" in clean_clinical_transcript("kemarin makan sebelah pedas")
+    assert "lauk pauk" in clean_clinical_transcript("ada lau pauk")
+    assert "perhatikan" in clean_clinical_transcript("tolong beratikan ya")
+    assert "mboten enten" in clean_clinical_transcript("keluhan mual buat ternenten")
+    assert "tetep mangan" in clean_clinical_transcript("tapi tetemangan mboten?")
+    assert "mudah dicerna" in clean_clinical_transcript("makanan yang mudah di jernah")
+    assert "obat anti diare" in clean_clinical_transcript("ini ada opat antidiari")
+    assert "dituku di apotek" in clean_clinical_transcript("obate dituduh di apotek")
+
+
 

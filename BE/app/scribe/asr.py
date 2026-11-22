@@ -13,18 +13,21 @@ from app.config import Settings
 # terlalu panjang bisa membuat Whisper "mendengar" istilah itu di bagian hening (halusinasi).
 PROMPT_DEWASA = (
     "Percakapan konsultasi dokter dengan pasien dewasa di poli rawat jalan, bahasa Indonesia "
-    "kadang campur bahasa Jawa. Keluhan: pusing berputar, sakit kepala cenat-cenut, demam, batuk, "
-    "sesak napas, nyeri ulu hati, mual, muntah, lemas. Riwayat darah tinggi, gula darah, maag, "
-    "alergi obat. Obat: parasetamol, amlodipin, metformin, omeprazol."
+    "kadang campur bahasa Jawa. Sapaan: duduk dulu dok, monggo pinarak. "
+    "Keluhan: pusing berputar, sakit kepala cenat-cenut, demam, batuk, "
+    "sesak napas, nyeri ulu hati, mual, muntah, BAB cair, diare, lendir, darah pada BAB, seblak, lauk pedas, lemas. "
+    "Ungkapan: mboten enten dok, tetep mangan, dituku di apotek. Riwayat darah tinggi, gula darah, maag, "
+    "alergi obat. Obat: parasetamol, amlodipin, metformin, omeprazol, obat anti diare, oralit."
 )
 # Prompt lama untuk skenario poli anak (dipakai bila ASR_PROMPT=anak).
 PROMPT_ANAK = (
     "Percakapan konsultasi dokter spesialis anak dengan ibu pasien di poli rawat jalan, "
-    "bahasa Indonesia campur bahasa Jawa Timuran. "
+    "bahasa Indonesia campur bahasa Jawa Timuran. Sapaan: duduk dulu dok, monggo pinarak, silakan duduk. "
     "Keluhan: demam tinggi, sumer, nggreges, panas adem, batuk grok-grok, pilek, mual, "
-    "muntah, diare, mencret, sesak, ngelu, sambat sirah, lemes, kejang demam, mimisan, "
-    "biduran, ruam gatal, alergi udang. "
-    "Obat: parasetamol sirup, sanmol, tempra, proris, ibuprofen, amoksisilin, cefixime, oralit, zink. "
+    "muntah, diare, mencret, feses ada lendir, darah pada BAB, sesak, ngelu, lemes, kejang demam, mimisan, "
+    "biduran, ruam gatal, seblak pedas, lauk. "
+    "Ungkapan: keluhan mboten enten dok, tetep mangan bubur, dituku nang apotek. "
+    "Obat: parasetamol sirup, sanmol, tempra, proris, ibuprofen, amoksisilin, cefixime, oralit, zink, obat anti diare. "
     "Suhu tubuh tiga puluh delapan koma sembilan derajat, berat badan tujuh belas setengah kilo."
 )
 PROMPTS = {"dewasa": PROMPT_DEWASA, "anak": PROMPT_ANAK, "none": None}
@@ -33,6 +36,44 @@ INITIAL_PROMPT: str | None = PROMPT_DEWASA
 
 def prompt_for(s: Settings) -> str | None:
     return PROMPTS.get(s.asr_prompt, INITIAL_PROMPT)
+
+
+# Aturan koreksi fonetik dan istilah klinis/dialek pasca-ASR
+PHONETIC_CORRECTIONS: list[tuple[re.Pattern, str]] = [
+    # Voicing & Consonants
+    (re.compile(r"\b(?:tutu[-\s]?tulu|tutu[-\s]?dulu|duduk[-\s]?tulu)\b", re.I), "duduk dulu"),
+    (re.compile(r"\blentir\b", re.I), "lendir"),
+    (re.compile(r"\btiare\b", re.I), "diare"),
+    (re.compile(r"\bGabrinya\b", re.I), "BAB-nya"),
+    (re.compile(r"\b(?:darah\s+)?patah\s+(?:BAP|BAB)\b", re.I), "darah pada BAB"),
+    (re.compile(r"\bpatah\s+(?:BAP|BAB)\b", re.I), "pada BAB"),
+    (re.compile(r"\bBAP\b(?=\s*(?:cair|keras|encer|berdarah|berlendir|-nya|nya|\.|\,|$))", re.I), "BAB"),
+    (re.compile(r"\b(makan|habis|jajan|beli|nyemil|cemilan)\s+sebelah\b", re.I), r"\1 seblak"),
+    (re.compile(r"\bsebelah\s+(pedas|pedes|level|kuah|jeletot|ceker|cilok)\b", re.I), r"seblak \1"),
+    (re.compile(r"\blau\b(?=\s*(?:pauk|makan|nasi|ayam|tahu|tempe|ikan|\.|\,|$))", re.I), "lauk"),
+    (re.compile(r"\bberatikan\b", re.I), "perhatikan"),
+    (re.compile(r"\b(?:buat\s+)?ternenten\b", re.I), "mboten enten"),
+    (re.compile(r"\bboten\s+enten\b", re.I), "mboten enten"),
+    (re.compile(r"\bdog\b(?=[\s,\.\?!]|$)", re.I), "dok"),
+    (re.compile(r"\btetemangan\b", re.I), "tetep mangan"),
+    (re.compile(r"\bmudah\s+di\s*jernah\b", re.I), "mudah dicerna"),
+    (re.compile(r"\bmudah\s+dicernah\b", re.I), "mudah dicerna"),
+    (re.compile(r"\bdi\s*jernah\b", re.I), "dicerna"),
+    (re.compile(r"\bopat\b", re.I), "obat"),
+    (re.compile(r"\bantidiari\b", re.I), "anti diare"),
+    (re.compile(r"\b(obat[a-z]*|sirup|puyer|resep)\s+(?:nya\s+)?dituduh\b", re.I), r"\1 dituku"),
+    (re.compile(r"\bdituduh\s+(?:di\s+)?(apotek|toko|warung)\b", re.I), r"dituku di \1"),
+    (re.compile(r"\bdi\s+tuduh\s+(?:di\s+)?(apotek|toko|warung)\b", re.I), r"dituku di \1"),
+]
+
+
+def clean_clinical_transcript(text: str) -> str:
+    """Membersihkan kesalahan fonetik umum, akronim medis, dan kata serapan dialek lokal."""
+    if not text:
+        return ""
+    for pat, rep in PHONETIC_CORRECTIONS:
+        text = pat.sub(rep, text)
+    return text
 
 
 _models: dict[str, object] = {}
@@ -53,6 +94,7 @@ def get_model(s: Settings, name: str | None = None):
 def _split_sentences(text: str, start: float, end: float) -> list[tuple[float, float, str]]:
     """Whisper sering menggabung dua giliran bicara dalam satu segmen; pecah per kalimat
     dengan waktu dibagi proporsional panjang teks agar label pembicara lebih tepat."""
+    text = clean_clinical_transcript(text)
     parts = [p.strip() for p in re.split(r"(?<=[.?!])\s+", text.strip()) if p.strip()]
     if len(parts) <= 1:
         return [(start, end, text.strip())]
@@ -97,8 +139,8 @@ def _run(audio, s: Settings, offset: float = 0.0, model: str | None = None, cont
     segments, _ = get_model(s, model).transcribe(
         audio, language="id", task="transcribe", beam_size=5, temperature=0.0,
         initial_prompt=prompt or None, condition_on_previous_text=False,
-        vad_filter=True, vad_parameters={"min_silence_duration_ms": 400})
-    return [{"start": round(seg.start + offset, 2), "end": round(seg.end + offset, 2), "text": seg.text.strip()}
+        vad_filter=True, vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 200})
+    return [{"start": round(seg.start + offset, 2), "end": round(seg.end + offset, 2), "text": clean_clinical_transcript(seg.text.strip())}
             for seg in segments if seg.text.strip()]
 
 
@@ -190,12 +232,13 @@ def parse_text_transcript(text: str) -> list[dict]:
     """Transkrip teks 'Dokter: ... / Ibu: ...' (skenario uji, atau cadangan saat demo)."""
     out = []
     for line in text.splitlines():
-        if not line.strip():
+        line = clean_clinical_transcript(line.strip())
+        if not line:
             continue
         m = SPEAKER_PREFIX.match(line)
         if m:
             role = _ROLE.get(m.group(1).lower(), "guardian")
             out.append({"i": len(out), "start": None, "end": None, "speaker": role, "text": m.group(2).strip()})
         else:  # baris tanpa awalan peran: segmen sendiri, peran ditentukan LLM
-            out.append({"i": len(out), "start": None, "end": None, "speaker": None, "text": line.strip()})
+            out.append({"i": len(out), "start": None, "end": None, "speaker": None, "text": line})
     return out

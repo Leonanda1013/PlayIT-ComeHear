@@ -232,10 +232,13 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     try {
       await saved()
       // noiseSuppression dimatikan: filter bawaan browser untuk video call sering memotong suku kata
-      // pelan dan membuat suara "robotik", sehingga merugikan Whisper. Echo cancellation tetap aktif.
+      // pelan dan membuat suara "robotik", sehingga merugikan Whisper. Echo cancellation, mono 16kHz, dan AGC tetap aktif.
       const audioConstraints: MediaTrackConstraints = {
+        channelCount: 1,
+        sampleRate: 16000,
         echoCancellation: true,
         noiseSuppression: false,
+        autoGainControl: true,
         ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
       }
       let media: MediaStream
@@ -243,7 +246,15 @@ export function SubjectivePage({ data }: { data: Consultation }) {
         media = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
       } catch (firstErr) {
         if (selectedDeviceId) {
-          media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false } })
+          media = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              channelCount: 1,
+              sampleRate: 16000,
+              echoCancellation: true,
+              noiseSuppression: false,
+              autoGainControl: true,
+            },
+          })
         } else {
           throw firstErr
         }
@@ -254,7 +265,11 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       sessionId.current = continueExisting && interruptedSession ? interruptedSession.id : null
       uploads.current = Promise.resolve()
       const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined
-      const next = new MediaRecorder(media, type ? { mimeType: type } : undefined); recorder.current = next
+      const next = new MediaRecorder(media, {
+        ...(type ? { mimeType: type } : {}),
+        audioBitsPerSecond: 64000,
+      })
+      recorder.current = next
       next.ondataavailable = (event) => { if (event.data.size) sendChunk(event.data) }
       next.onerror = () => { setError('Rekaman terhenti. Coba lagi atau gunakan pencatatan manual.'); setActiveStream(null); setRecording(false) }
       next.onstop = async () => {
