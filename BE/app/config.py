@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -48,7 +49,16 @@ class Settings(BaseSettings):
     # Kosong = sama dengan ASR_MODEL (tanpa transkripsi ulang).
     asr_final_model: str = ""
 
-    llm_providers: str = "gemini"
+    llm_providers: str = "claude"
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-sonnet-5-5"
+    claude_max_tokens: int = Field(default=8192, ge=1, le=65536)
+    llm_timeout_s: float = Field(default=45.0, gt=0, le=300)
+    llm_max_retries: int = Field(default=1, ge=0, le=2)
+    # Kontrak konfigurasi adapter OpenAI milik Kemal. Registry memuatnya secara lazy.
+    openai_api_key: str = ""
+    openai_model: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
     gemini_api_key: str = ""
     gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.5-flash"
 
