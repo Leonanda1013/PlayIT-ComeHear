@@ -7,8 +7,10 @@ Supaya dokter tidak menunggu:
 3. Kata kunci ICD diambil dari hasil ekstraksi S; panggilan tambahan hanya jika hasilnya kosong.
 4. Bagian S disimpan begitu jadi (status "coding"), sebelum usulan ICD selesai.
 """
+import json
 import logging
 import time
+from uuid import uuid4
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.config import Settings
@@ -140,6 +142,7 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             ss.status, ss.finished_at = "done", utcnow()
             timings["total_s"] = round(sum(v for k, v in timings.items() if k in ("asr_s", "extract_s", "icd_s")), 1)
             ss.timings, ss.model_info = timings, {**(ss.model_info or {}), **models}
+            ss.model_info = {**ss.model_info, "llm_usage": llm.usage_report()}
             db.add(AuditLog(action="scribe_done", obj=f"visit:{visit.id}", summary=str(timings)))
             db.commit()
         except Replaced:
@@ -151,6 +154,7 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             ss = db.get(ScribeSession, session_id)
             if ss.status != "replaced":
                 ss.status, ss.error, ss.timings = "failed", str(e)[:2000], timings
+                ss.model_info = {**(ss.model_info or {}), "llm_usage": llm.usage_report()}
             if ss.status != "replaced" and ss.visit.status == "processing":
                 ss.visit.status = "consented"
             db.commit()
@@ -210,6 +214,13 @@ def run_suggest_icd(
         except Exception:
             log.exception("Gagal menyusun usulan ICD-10 background untuk kunjungan %s", visit_id)
             db.rollback()
+        finally:
+            # Append satu record per job, termasuk hasil kosong/gagal. JSON pada
+            # sesi bersama bisa saling menimpa bila dua job ICD selesai bersamaan.
+            db.add(AuditLog(action="llm_usage_icd", obj=f"visit:{visit_id}", summary=json.dumps({
+                "job_id": str(uuid4()), "usage": llm.usage_report(),
+            })))
+            db.commit()
 
 
 def submit_suggest_icd(

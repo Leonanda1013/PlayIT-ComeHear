@@ -1,25 +1,20 @@
-"""Lapisan LLM Gemini dengan fallback antar-model.
+"""Facade LLM: generate() tetap mengembalikan (model Pydantic, nama model).
 
-LLM_PROVIDERS="gemini" memakai API; "mock" untuk uji tanpa API.
-"mock" dipakai untuk uji tanpa API (mengembalikan hasil heuristik deterministik).
-Catatan UU PDP Pasal 56: API luar negeri berarti data transkrip keluar Indonesia;
-selama kompetisi hanya data sintetis/role-play yang dikirim.
+Provider baru mengembalikan ProviderResult dari llm_types; usage_report() memberikan
+salinan metadata per instance/job tanpa prompt atau respons klinis.
 """
 import logging
 import time
 from collections.abc import Callable
-from typing import TypeVar
+from importlib import import_module
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
+from app.scribe.llm_claude import ClaudeProvider
+from app.scribe.llm_types import Attempt, LLMError, ProviderResult, T, TokenUsage, error_kind, token_count
 
 log = logging.getLogger("comehear.llm")
-T = TypeVar("T", bound=BaseModel)
-
-
-class LLMError(Exception):
-    pass
 
 
 class GeminiProvider:
@@ -28,13 +23,15 @@ class GeminiProvider:
 
     def __init__(self, s: Settings):
         if not s.gemini_api_key:
-            raise LLMError("GEMINI_API_KEY kosong")
+            raise LLMError("GEMINI_API_KEY kosong", kind="configuration")
         from google import genai
         self.genai = genai
         from google.genai import types
         # Batas waktu per panggilan: lebih baik pindah ke model cadangan daripada menunggu >1 menit.
         self.client = genai.Client(api_key=s.gemini_api_key, http_options=types.HttpOptions(timeout=45_000))
         self.models = [m.strip() for m in s.gemini_models.split(",") if m.strip()]
+        if not self.models:
+            raise LLMError("GEMINI_MODELS kosong", kind="configuration")
 
     # Model yang baru saja 503 dipindah ke belakang antrean selama COOLDOWN_S, supaya satu sesi
     # (pembicara -> S -> ICD) tidak membuang waktu mencoba model penuh yang sama tiga kali.
@@ -59,56 +56,158 @@ class GeminiProvider:
                 response_schema=schema, temperature=0.0,
                 # Ekstraksi terstruktur tidak butuh penalaran panjang.
                 thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)))
+        usage = getattr(res, "usage_metadata", None)
+        self._attempt_usage = TokenUsage(
+            input_tokens=token_count(usage, "prompt_token_count"),
+            output_tokens=token_count(usage, "candidates_token_count"),
+            cache_read_tokens=token_count(usage, "cached_content_token_count"),
+            thinking_tokens=token_count(usage, "thoughts_token_count"),
+        )
         return schema.model_validate_json(res.text)
 
-    def generate(self, system: str, prompt: str, schema: type[T]) -> tuple[T, str]:
+    def generate(self, system: str, prompt: str, schema: type[T]) -> ProviderResult[T]:
         last = None
         retry_model = None
-        for model in self._ordered_models():
+        attempts = []
+
+        def request(model: str) -> T:
+            start = time.perf_counter()
+            self._attempt_usage = TokenUsage()
             try:
                 result = self._generate_with_model(model, system, prompt, schema)
+            except Exception as exc:
+                attempts.append(Attempt(self.name, model, round(time.perf_counter() - start, 4),
+                                        "error", self._attempt_usage, error_kind(exc)))
+                raise
+            attempts.append(Attempt(self.name, model, round(time.perf_counter() - start, 4),
+                                    "ok", self._attempt_usage))
+            return result
+
+        for model in self._ordered_models():
+            try:
+                result = request(model)
                 self._busy_until.pop(model, None)
-                return result, f"gemini:{model}"
+                return ProviderResult(result, f"gemini:{model}", tuple(attempts))
             except Exception as e:  # model lain dicoba sebelum menunggu model yang sedang sibuk
                 last = e
                 if self._retryable(e):
                     self._busy_until[model] = time.time() + self.COOLDOWN_S
                     retry_model = model
-                log.warning("Gemini %s gagal: %s", model, str(e)[:120])
+                log.warning("Gemini %s gagal (%s)", model, error_kind(e))
         # Satu retry dengan jeda setelah semua model gagal. Batasnya satu panggilan tambahan.
         if retry_model:
             time.sleep(self.RETRY_DELAY_S)
             try:
-                result = self._generate_with_model(retry_model, system, prompt, schema)
+                result = request(retry_model)
                 self._busy_until.pop(retry_model, None)
-                return result, f"gemini:{retry_model}"
+                return ProviderResult(result, f"gemini:{retry_model}", tuple(attempts))
             except Exception as e:
                 last = e
-                log.warning("Retry Gemini %s gagal: %s", retry_model, str(e)[:120])
-        raise LLMError(f"semua model Gemini gagal: {last}")
+                log.warning("Retry Gemini %s gagal (%s)", retry_model, error_kind(e))
+        raise LLMError("semua model Gemini gagal", kind=error_kind(last) if last else "configuration",
+                       attempts=tuple(attempts)) from None
+
+
+def _openai_provider(settings: Settings):
+    """Titik integrasi B1 Kemal: file/class ini belum perlu ada pada PR A1-A5."""
+    try:
+        module = import_module("app.scribe.llm_openai")
+    except ModuleNotFoundError as exc:
+        if exc.name == "app.scribe.llm_openai":
+            raise LLMError("Adapter OpenAI belum tersedia (task B1 Kemal)", kind="configuration") from None
+        raise LLMError("Dependensi adapter OpenAI belum terpasang", kind="configuration") from None
+    return module.OpenAIProvider(settings)
+
+
+PROVIDERS: dict[str, Callable] = {
+    "claude": ClaudeProvider,
+    "gemini": GeminiProvider,
+    "openai": _openai_provider,
+}
 
 
 class LLM:
     def __init__(self, s: Settings, mock: Callable[[str, type[T]], T] | None = None):
         self.providers = []
         self.mock = mock
-        for name in s.provider_list:
-            if name == "gemini":
-                try:
-                    self.providers.append(GeminiProvider(s))
-                except Exception as e:  # key kosong / SDK tidak siap
-                    log.warning("penyedia Gemini dilewati: %s", e)
-            elif name != "mock":
-                raise LLMError(f"penyedia LLM tidak didukung: {name}")
-        self.use_mock = "mock" in s.provider_list
+        self._calls: list[dict] = []
+        self._configuration_errors: list[str] = []
+        names = s.provider_list
+        if any(name not in (*PROVIDERS, "mock") for name in names):
+            raise LLMError("penyedia LLM tidak didukung", kind="configuration")
+        if "mock" in names and (names[-1] != "mock" or names.count("mock") != 1):
+            raise LLMError("mock hanya boleh muncul sekali di akhir LLM_PROVIDERS", kind="configuration")
+        for name in dict.fromkeys(names):
+            if name == "mock":
+                continue
+            try:
+                self.providers.append(PROVIDERS[name](s))
+            except Exception as exc:
+                # Hanya konfigurasi provider yang boleh dilewati, bukan bug adapter.
+                if not isinstance(exc, (LLMError, ImportError)):
+                    raise LLMError(f"Inisialisasi provider {name} gagal", kind="configuration") from None
+                if isinstance(exc, LLMError) and exc.kind != "configuration":
+                    raise
+                self._configuration_errors.append(name)
+                log.warning("penyedia %s dilewati (configuration)", name)
+        self.use_mock = "mock" in names
+
+    def _record(self, schema: type[BaseModel], attempts: tuple[Attempt, ...]) -> None:
+        self._calls.append({"task": schema.__name__, "attempts": [a.to_dict() for a in attempts]})
+
+    def usage_report(self) -> dict:
+        """Snapshot JSON metadata; totals hanya jumlah token yang diketahui.
+
+        Cache/thinking tetap terpisah, karena arti input/output berbeda antarprovider.
+        complete=False berarti total ini bukan total seluruh token/biaya yang ditagih.
+        """
+        from copy import deepcopy
+
+        calls = deepcopy(self._calls)
+        attempts = [a for call in calls for a in call["attempts"]]
+        keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "thinking_tokens")
+        totals = {}
+        for key in keys:
+            known = [a["usage"][key] for a in attempts if a["usage"][key] is not None]
+            totals[key] = sum(known) if known else None
+        return {"version": 1, "calls": calls, "totals": totals,
+                "unknown_usage_attempts": sum(a["usage"]["input_tokens"] is None or
+                                              a["usage"]["output_tokens"] is None for a in attempts),
+                "complete": bool(attempts) and all(a["usage"]["input_tokens"] is not None and
+                                                  a["usage"]["output_tokens"] is not None for a in attempts),
+                "skipped_providers": list(self._configuration_errors)}
 
     def generate(self, system: str, prompt: str, schema: type[T]) -> tuple[T, str]:
         errors = []
         for p in self.providers:
             try:
-                return p.generate(system, prompt, schema)
+                result = p.generate(system, prompt, schema)
             except LLMError as e:
-                errors.append(str(e))
+                attempts = e.attempts or (Attempt(p.name, "unknown", 0.0, "error", error_kind=e.kind),)
+                self._record(schema, attempts)
+                errors.append(e.kind)
+                continue
+            try:
+                data = schema.model_validate(result.data)
+            except ValidationError:
+                # Defensif terhadap adapter yang melanggar kontrak; usage tetap tercatat.
+                self._record(schema, result.attempts + (
+                    Attempt(p.name, result.model, 0.0, "error", error_kind="invalid_output"),))
+                errors.append("invalid_output")
+                continue
+            self._record(schema, result.attempts or (Attempt(p.name, result.model, 0.0, "ok"),))
+            return data, result.model
         if self.use_mock and self.mock:
-            return self.mock(prompt, schema), "mock"
-        raise LLMError(" | ".join(errors) or "tidak ada penyedia LLM yang aktif (isi API key di .env)")
+            start = time.perf_counter()
+            try:
+                data = schema.model_validate(self.mock(prompt, schema))
+            except Exception:
+                self._record(schema, (Attempt("mock", "mock", round(time.perf_counter() - start, 4),
+                                              "error", TokenUsage(0, 0), "invalid_output"),))
+                raise LLMError("Mock tidak mendukung schema/output ini", kind="invalid_output") from None
+            self._record(schema, (Attempt("mock", "mock", round(time.perf_counter() - start, 4),
+                                          "ok", TokenUsage(0, 0)),))
+            return data, "mock"
+        kind = errors[-1] if errors else "configuration"
+        raise LLMError("semua penyedia LLM gagal" if errors else
+                       "tidak ada penyedia LLM yang aktif (periksa provider, SDK, dan API key)", kind=kind)
