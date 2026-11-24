@@ -32,7 +32,7 @@ def main():
         assert c.get("/api/me").json()["name"] == "Siti Rahmawati"
         rooms = c.get("/api/lokasi").json()
         assert [(room["name"], room["poli"]) for room in rooms] == [
-            ("Bilik Konsultasi 01", "Poli Umum"), ("Bilik Konsultasi 02", "Poli Umum")]
+            ("Bilik 1", "Poli Umum"), ("Bilik 2", "Poli Umum")]
         doctors = c.get("/api/practitioners").json()
         assert {dr["name"]: dr["default_location_id"] for dr in doctors} == {
             "dr. James Pratama": rooms[0]["id"], "dr. Kemal Suhendra": rooms[1]["id"]}

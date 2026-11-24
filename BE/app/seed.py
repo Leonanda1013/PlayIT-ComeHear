@@ -16,8 +16,8 @@ MOCK_SECOND_PRACTITIONER = "mock-practitioner-kemal"
 MOCK_SECOND_LOCATION = "00000000-0000-4000-8000-000000000002"
 CLINIC_DOMAIN = "klinikbungamelati.id"
 GENERAL_CLINIC = "Poli Umum"
-ROOM_ONE = "Bilik Konsultasi 01"
-ROOM_TWO = "Bilik Konsultasi 02"
+ROOM_ONE = "Bilik 1"
+ROOM_TWO = "Bilik 2"
 
 DEMO_PATIENTS = [  # nama sesuai desain UI; semua pasien fiktif
     ("Vincentius Leonanda Prabowo", date(2007, 3, 14), "male"),
@@ -53,8 +53,8 @@ def next_queue_no(db: Session, location_id: int) -> int:
 def configure_general_clinic(db: Session, password: str, *, mock_references: bool) -> None:
     """Siapkan dua bilik dan akun klinik dengan mempertahankan ID master lama."""
     rooms = {room.name: room for room in db.scalars(select(Location))}
-    first_room = rooms.get(ROOM_ONE) or rooms.get("Bilik Konsultasi 03")
-    second_room = rooms.get(ROOM_TWO)
+    first_room = rooms.get(ROOM_ONE) or rooms.get("Bilik Konsultasi 01") or rooms.get("Bilik Konsultasi 03")
+    second_room = rooms.get(ROOM_TWO) or rooms.get("Bilik Konsultasi 02")
     if first_room is None:
         first_room = Location(satusehat_location_id=SANDBOX_LOCATION if mock_references else None)
         db.add(first_room)

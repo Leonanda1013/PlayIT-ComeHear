@@ -64,7 +64,7 @@ class Patient(Base):
 class Location(Base):
     __tablename__ = "locations"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120))          # mis. "Bilik Konsultasi 01"
+    name: Mapped[str] = mapped_column(String(120))          # mis. "Bilik 1"
     poli: Mapped[str | None] = mapped_column(String(120))   # mis. "Poli Umum"
     satusehat_location_id: Mapped[str | None] = mapped_column(String(64))
     service_type_code: Mapped[str] = mapped_column(String(32), default=GENERAL_PRACTICE_CODE)

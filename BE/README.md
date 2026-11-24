@@ -36,8 +36,8 @@ Buka aplikasi dan masuk dengan akun di bawah. Akun demo memakai kata sandi `DEMO
 
 | Nama | Layanan | Email |
 |---|---|---|
-| dr. James Pratama | Poli Umum, Bilik Konsultasi 01 | `james@klinikbungamelati.id` |
-| dr. Kemal Suhendra | Poli Umum, Bilik Konsultasi 02 | `kemal@klinikbungamelati.id` |
+| dr. James Pratama | Poli Umum, Bilik 1 | `james@klinikbungamelati.id` |
+| dr. Kemal Suhendra | Poli Umum, Bilik 2 | `kemal@klinikbungamelati.id` |
 | Siti Rahmawati | Perawat | `perawat@klinikbungamelati.id` |
 | Admin Rekam Medis | Administrasi | `admin@klinikbungamelati.id` |
 
@@ -50,9 +50,11 @@ Alur layar (mengikuti desain UI): **Antrean** (Panggil → Isi SOAP) → **S** (
 transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI, plan, Inst/Impl, evaluasi)
 → **Verifikasi** (konfirmasi dokter, Validasi dan Simpan → kirim SATUSEHAT) → **Resume**.
 
+Untuk mengubah nama bilik database lama menjadi `Bilik 1`, `Bilik 2`, dan seterusnya, jalankan `.venv/Scripts/python scripts/rename_rooms.py`. Perintah ini hanya memperbarui nama bilik.
+
 Untuk memperbarui data master database lama, jalankan `.venv/Scripts/python scripts/upgrade_demo.py --clinic-only`.
 Perintah ini mempertahankan ID, kata sandi akun lama, dan riwayat kunjungan. Pada mode sandbox,
-isi ID Practitioner SATUSEHAT untuk dr. Kemal dan ID Location untuk Bilik 02 sebelum validasi SOAP.
+isi ID Practitioner SATUSEHAT untuk dr. Kemal dan ID Location untuk Bilik 2 sebelum validasi SOAP.
 
 ### Supabase PostgreSQL
 
