@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # ASR_FINAL_MODEL mentranskrip ulang seluruh audio setelah "Selesai" dan hasilnya yang dikirim ke LLM.
     # Kosong = sama dengan ASR_MODEL (tanpa transkripsi ulang).
     asr_final_model: str = ""
+
+    @field_validator("asr_model", "asr_final_model", mode="before")
+    @classmethod
+    def clean_asr_model(cls, v: str) -> str:
+        if isinstance(v, str):
+            v = v.strip().strip("'\"")
+            while v.startswith("ASR_MODEL="):
+                v = v[len("ASR_MODEL="):].strip().strip("'\"")
+        return v
 
     llm_providers: str = "claude"
     anthropic_api_key: str = ""

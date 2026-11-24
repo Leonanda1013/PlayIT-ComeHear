@@ -6,8 +6,9 @@ faster-whisper, jadi webm/opus dari browser bisa langsung diproses tanpa ffmpeg 
 """
 import re
 import threading
+from pathlib import Path
 
-from app.config import Settings
+from app.config import BASE_DIR, Settings
 
 # Prompt awal Whisper: konteks + kosakata yang sering muncul. Dibuat singkat karena daftar kata yang
 # terlalu panjang bisa membuat Whisper "mendengar" istilah itu di bagian hening (halusinasi).
@@ -82,11 +83,21 @@ _model_lock = threading.Lock()
 
 def get_model(s: Settings, name: str | None = None):
     """Model dimuat sekali per nama (live dan final bisa berbeda) lalu dipakai ulang."""
-    key = name or s.asr_model
+    raw_key = name or s.asr_model
+    if isinstance(raw_key, str):
+        raw_key = raw_key.strip().strip("'\"")
+        while raw_key.startswith("ASR_MODEL="):
+            raw_key = raw_key[len("ASR_MODEL="):].strip().strip("'\"")
+    key = raw_key
     with _model_lock:
         if key not in _models:
             from faster_whisper import WhisperModel
-            _models[key] = WhisperModel(key, device=s.asr_device, compute_type=s.asr_compute_type,
+            model_path = key
+            if (BASE_DIR / key).is_dir():
+                model_path = str(BASE_DIR / key)
+            elif Path(key).is_dir():
+                model_path = str(Path(key).resolve())
+            _models[key] = WhisperModel(model_path, device=s.asr_device, compute_type=s.asr_compute_type,
                                         cpu_threads=s.asr_cpu_threads)
         return _models[key]
 
