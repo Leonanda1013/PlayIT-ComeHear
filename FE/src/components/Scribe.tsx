@@ -137,6 +137,7 @@ export function TranscriptBubble({
   highlightQuote = null,
   citedFields = [],
   onClick,
+  idPrefix = 'transcript-seg',
 }: {
   segment: TranscriptSegment
   patientName: string
@@ -145,6 +146,7 @@ export function TranscriptBubble({
   highlightQuote?: string | null
   citedFields?: string[]
   onClick?: () => void
+  idPrefix?: string
 }) {
   const isDoctor = segment.speaker === 'doctor' || segment.speaker === 'dokter'
   const label = isDoctor ? `Dokter${doctorName ? ` (${doctorName})` : ''}` : segment.speaker === 'guardian' ? 'Pendamping pasien' : `Pasien (${shortName(patientName)})`
@@ -152,7 +154,7 @@ export function TranscriptBubble({
   const segIndex = segment.i
 
   return <div
-    id={segIndex !== undefined ? `transcript-seg-${segIndex}` : undefined}
+    id={segIndex !== undefined ? `${idPrefix}-${segIndex}` : undefined}
     onClick={onClick}
     className={`grid grid-cols-[22px_minmax(0,1fr)_22px] items-start gap-x-[13px] transition-all duration-200 ${onClick ? 'cursor-pointer' : ''}`}
   >

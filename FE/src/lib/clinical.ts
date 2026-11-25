@@ -18,6 +18,12 @@ export const vitalLabels: Record<string, string> = {
 export const visitPath = (id: number, segment = '') => `/api/backend/visits/${id}${segment}`
 export const getConsultation = (id: number) => apiRequest<Consultation>(visitPath(id))
 export const getScribe = (id: number) => apiRequest<ScribeState>(visitPath(id, '/scribe'))
+export const retryScribe = (id: number, sessionId: number) =>
+  apiRequest(visitPath(id, `/scribe/${sessionId}/retry`), { method: 'POST' })
+export const startAudioSession = (id: number) =>
+  apiRequest<{ session_id: number; next_seq: number }>(visitPath(id, '/audio-start'), { method: 'POST' })
+export const resumeAudioSession = (id: number, sessionId: number) =>
+  apiRequest<{ session_id: number; next_seq: number }>(visitPath(id, `/recording-recovery/${sessionId}/resume`), { method: 'POST' })
 export const getResume = (id: number) => apiRequest<Resume>(visitPath(id, '/resume'))
 export const saveSoap = (id: number, data: Record<string, string>) => apiRequest<{ status: string; detail?: string; submission_id?: number }>(visitPath(id, '/soap'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export const triggerSuggestIcd = (id: number, data?: { subjective?: Record<string, string>; objective?: unknown }) =>
@@ -34,13 +40,7 @@ export async function finishAudioSession(id: number, sessionId: number) {
 }
 
 export async function closeAudioSession(id: number, sessionId: number) {
-  const body = new FormData()
-  body.set('session_id', String(sessionId))
-  try {
-    return await apiRequest(visitPath(id, '/recording/close'), { method: 'POST', body })
-  } catch {
-    return await apiRequest(visitPath(id, '/audio-finish'), { method: 'POST', body })
-  }
+  return apiRequest(visitPath(id, `/recording-recovery/${sessionId}/abandon`), { method: 'POST' })
 }
 
 export function formatWib(value: string | null | undefined) {

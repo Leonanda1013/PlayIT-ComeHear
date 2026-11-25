@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronDown, MicOff, Pause, Play, Square, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, MicOff, Pause, Play, RefreshCw, Square, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble, Waveform } from '@/components/Scribe'
 import { Dialog, Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
-import { closeAudioSession, finishAudioSession, getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
+import { closeAudioSession, finishAudioSession, getScribe, resumeAudioSession, startAudioSession, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
 import { mmss } from '@/lib/format'
 import type { Consultation } from '@/lib/types'
 
@@ -34,10 +34,13 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const [showNavBlockModal, setShowNavBlockModal] = useState(false)
   const micMenuRef = useRef<HTMLDivElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
+  const startingRecording = useRef(false)
   const stream = useRef<MediaStream | null>(null)
   const sessionId = useRef<number | null>(null)
   const seq = useRef(0)
   const uploads = useRef<Promise<unknown>>(Promise.resolve())
+  const pendingChunks = useRef<{ seq: number; blob: Blob }[]>([])
+  const [uploadFailed, setUploadFailed] = useState(false)
   const {
     consent,
     decide: saveDecision,
@@ -68,21 +71,8 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     async function updateAudioDevices() {
       if (!navigator.mediaDevices?.enumerateDevices) return
       try {
-        let deviceList = await navigator.mediaDevices.enumerateDevices()
-        let audioInputs = deviceList.filter((d) => d.kind === 'audioinput')
-
-        // Jika label masih kosong karena belum ada izin audio di browser, buka stream sementara untuk memicu izin
-        const hasLabels = audioInputs.some((d) => Boolean(d.label))
-        if (!hasLabels && navigator.mediaDevices.getUserMedia) {
-          try {
-            const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-            tempStream.getTracks().forEach((track) => track.stop())
-            deviceList = await navigator.mediaDevices.enumerateDevices()
-            audioInputs = deviceList.filter((d) => d.kind === 'audioinput')
-          } catch {
-            // Izin belum diberikan di level peramban
-          }
-        }
+        const deviceList = await navigator.mediaDevices.enumerateDevices()
+        const audioInputs = deviceList.filter((d) => d.kind === 'audioinput')
 
         if (!mounted) return
         setAudioDevices(audioInputs)
@@ -116,6 +106,8 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const interruptedSession = data.session && (data.session.status === 'recording' || (data.session as { status: string }).status === 'interrupted')
     ? data.session
     : null
+  const requestedResumeId = (location.state as { resumeSessionId?: number } | null)?.resumeSessionId
+  const resumableSession = interruptedSession || (requestedResumeId === data.session?.id && data.session?.status === 'done' ? data.session : null)
 
   // Alasan pengalihan draf S sesuai kondisi
   const redirectReason = (location.state as { redirectReason?: string } | null)?.redirectReason ||
@@ -128,7 +120,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
 
   // Peringatan saat pengguna me-refresh atau menutup tab saat perekaman berlangsung
   useEffect(() => {
-    if (!recording) return
+    if (!recording && !uploadFailed) return
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = 'Perekaman audio sedang berlangsung. Meninggalkan halaman dapat memutus sesi rekaman.'
@@ -136,11 +128,11 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [recording])
+  }, [recording, uploadFailed])
 
   // Pencegahan navigasi internal web aplikasi (klik sidebar menu, tab antrean, dll) saat sedang merekam
   useEffect(() => {
-    if (!recording) return
+    if (!recording && !uploadFailed) return
 
     function handleLinkClick(event: MouseEvent) {
       const target = event.target as HTMLElement | null
@@ -172,7 +164,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('click', handleLinkClick, true)
     }
-  }, [recording])
+  }, [recording, uploadFailed])
 
   function handleCancelLeave() {
     setShowNavBlockModal(false)
@@ -182,6 +174,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   function handleFinishAndLeave() {
     setShowNavBlockModal(false)
     setPendingNavigationUrl(null)
+    if (uploadFailed) { void retryUpload(); return }
     // Selesaikan perekaman secara normal: panggil stop() agar potongan audio diproses,
     // dikirim ke backend /audio-finish, dan diarahkan langsung ke halaman /draf-s
     if (recorder.current && recorder.current.state !== 'inactive') {
@@ -207,29 +200,68 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   }
 
   function decide(decision: 'setuju' | 'tolak', customGiver?: string, customRel?: string) {
-    if (recording) return
+    if (recording || busy || uploadFailed) return
     setError('')
     saveDecision(decision, customGiver, customRel)
   }
 
-  function sendChunk(blob: Blob) {
-    const n = seq.current++
-    uploads.current = uploads.current.then(async () => {
+  async function flushChunks() {
+    while (pendingChunks.current.length) {
+      const { seq: n, blob } = pendingChunks.current[0]
       const body = new FormData()
       body.set('seq', String(n))
       body.set('chunk', blob, `potongan-${n}.webm`)
       if (sessionId.current) body.set('session_id', String(sessionId.current))
       const result = await apiRequest<{ session_id: number }>(visitPath(id, '/audio-chunk'), { method: 'POST', body })
       sessionId.current = result.session_id
+      pendingChunks.current.shift()
+    }
+  }
+
+  function sendChunk(blob: Blob) {
+    pendingChunks.current.push({ seq: seq.current++, blob })
+    uploads.current = uploads.current.then(flushChunks)
+    void uploads.current.catch((caught) => {
+      setUploadFailed(true)
+      setError(caught instanceof Error ? caught.message : 'Potongan audio gagal dikirim.')
+      if (recorder.current?.state === 'recording') {
+        recorder.current.pause()
+        setPaused(true)
+      }
     })
-    uploads.current.catch((caught) => setError(caught instanceof Error ? caught.message : 'Potongan audio gagal dikirim.'))
+  }
+
+  async function finishRecording() {
+    if (!sessionId.current) throw new Error('Tidak ada audio yang terekam. Coba rekam ulang.')
+    await finishAudioSession(id, sessionId.current)
+    await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
+    navigate(`/kunjungan/${id}/draf-s`)
+  }
+
+  async function retryUpload() {
+    if (busy) return
+    setBusy(true); setError('')
+    try {
+      uploads.current = uploads.current.catch(() => {}).then(flushChunks)
+      await uploads.current
+      setUploadFailed(false)
+      if (!recording) await finishRecording()
+    } catch (caught) {
+      setUploadFailed(true)
+      setError(caught instanceof Error ? caught.message : 'Audio belum berhasil dikirim.')
+    } finally { setBusy(false) }
   }
 
   async function startRecording(continueExisting = false) {
+    if (busy || recording || uploadFailed || startingRecording.current) return
     setError('')
-    if (consent !== 'setuju') { setError('Pilih "Pasien Menyetujui Perekaman" terlebih dahulu sebelum memulai rekaman.'); return }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setError('Browser tidak mendukung perekaman. Gunakan pencatatan manual.'); return }
+    if (relation !== 'pasien' && !givenByName.trim()) { setError('Isi nama wali atau keluarga yang memberikan persetujuan sebelum mulai merekam.'); return }
+    startingRecording.current = true
+    setBusy(true)
     try {
+      // Simpan pilihan yang dibuat melalui tombol persetujuan sebelum mengakses mikrofon.
+      if (consent !== 'setuju') saveDecision('setuju', givenByName, relation)
       await saved()
       // noiseSuppression dimatikan: filter bawaan browser untuk video call sering memotong suku kata
       // pelan dan membuat suara "robotik", sehingga merugikan Whisper. Echo cancellation, mono 16kHz, dan AGC tetap aktif.
@@ -261,8 +293,12 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       }
       stream.current = media
       setActiveStream(media)
-      seq.current = 0
-      sessionId.current = continueExisting && interruptedSession ? interruptedSession.id : null
+      const session = continueExisting && resumableSession
+        ? await resumeAudioSession(id, resumableSession.id)
+        : await startAudioSession(id)
+      seq.current = session.next_seq
+      sessionId.current = session.session_id
+      pendingChunks.current = []
       uploads.current = Promise.resolve()
       const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined
       const next = new MediaRecorder(media, {
@@ -271,21 +307,21 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       })
       recorder.current = next
       next.ondataavailable = (event) => { if (event.data.size) sendChunk(event.data) }
-      next.onerror = () => { setError('Rekaman terhenti. Coba lagi atau gunakan pencatatan manual.'); setActiveStream(null); setRecording(false) }
+      next.onerror = () => { setError('Rekaman terhenti. Audio yang berhasil direkam akan dikirim.'); if (next.state !== 'inactive') next.stop() }
       next.onstop = async () => {
         media.getTracks().forEach((track) => track.stop()); setActiveStream(null); setRecording(false); setPaused(false); setBusy(true)
         try {
           await uploads.current
-          if (!sessionId.current) throw new Error('Tidak ada audio yang terekam. Coba rekam ulang.')
-          const body = new FormData(); body.set('session_id', String(sessionId.current))
-          await apiRequest(visitPath(id, '/audio-finish'), { method: 'POST', body })
-          await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
-          navigate(`/kunjungan/${id}/draf-s`)
-        } catch (caught) { setError(caught instanceof Error ? caught.message : 'Audio belum berhasil dikirim.') }
+          await finishRecording()
+        } catch (caught) { setUploadFailed(true); setError(caught instanceof Error ? caught.message : 'Audio belum berhasil dikirim.') }
         finally { setBusy(false) }
       }
       next.start(CHUNK_MS); setSeconds(0); setPaused(false); setRecording(true)
-    } catch (caught) { setError(caught instanceof Error && caught.message ? caught.message : 'Mikrofon tidak tersedia atau izin ditolak. Periksa perangkat lalu coba lagi.') }
+    } catch (caught) {
+      stream.current?.getTracks().forEach((track) => track.stop())
+      setActiveStream(null)
+      setError(caught instanceof Error && caught.message ? caught.message : 'Mikrofon tidak tersedia atau izin ditolak. Periksa perangkat lalu coba lagi.')
+    } finally { startingRecording.current = false; setBusy(false) }
   }
 
   async function handleFinishInterruptedSession() {
@@ -344,7 +380,8 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     <ConsentBlock
       consent={consent}
       onDecide={decide}
-      disabled={recording}
+      onAgreeAndStart={() => { void startRecording(!!resumableSession) }}
+      disabled={recording || busy || uploadFailed}
       patientName={data.visit.patient.name}
       givenByName={givenByName}
       relation={relation}
@@ -358,15 +395,20 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const transcript = live.data?.transcript || []
   const manual = consent === 'tolak'
   const currentDeviceLabel = audioDevices.find((d) => d.deviceId === selectedDeviceId)?.label ||
-    (audioDevices.length > 0 ? (audioDevices[0].label || 'Mikrofon Bawaan') : 'Mikrofon Bilik 3')
+    (audioDevices.length > 0 ? (audioDevices[0].label || 'Mikrofon Bawaan') : 'Mikrofon Default')
 
   return <div className="space-y-[27px]">
     <ClinicalHeader consultation={data} stage="subjektif" patientExtra={consentBlock} />
     {redirectReason && consent !== 'setuju' && <Notice tone="info">{redirectReason}</Notice>}
     {error && <Notice tone="bad">{error}</Notice>}
+    {resumableSession && !interruptedSession && !recording && <Notice tone="info">Klik Lanjutkan Rekaman untuk menambahkan percakapan ke audio sebelumnya. Draf Subjektif akan disusun kembali setelah rekaman selesai.</Notice>}
+    {uploadFailed && <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-[#f0c27b] bg-[#fffaf0] p-4" role="alert">
+      <p className="flex-1 text-sm text-[#78350f]">Audio yang belum terkirim masih tersimpan di tab ini. Coba kirim lagi sebelum melanjutkan rekaman. Tetap buka halaman ini sampai pengiriman selesai.</p>
+      <button type="button" disabled={busy} onClick={retryUpload} className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-ch-brand px-4 text-sm font-semibold text-white disabled:opacity-50"><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />{busy ? 'Mengirim…' : 'Coba Kirim Lagi'}</button>
+    </div>}
 
     {/* Banner Pemulihan Sesi Rekaman Terputus */}
-    {interruptedSession && !recording && (
+    {interruptedSession && !recording && !uploadFailed && consent === 'setuju' && (
       <div role="alert" className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-[#f0c27b] bg-[#fffaf0] p-4 text-[#7c4d0b] shadow-sm">
         <div className="flex items-start gap-3">
           <AlertTriangle className="mt-0.5 size-5 shrink-0 text-[#d97706]" />
@@ -475,18 +517,18 @@ export function SubjectivePage({ data }: { data: Consultation }) {
 
             <button
               type="button"
-              disabled={busy}
-              onClick={() => startRecording(false)}
+              disabled={busy || uploadFailed}
+              onClick={() => startRecording(!!resumableSession)}
               className={`inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-[12px] px-7 text-[16px] font-bold shadow-md transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ch-brand disabled:opacity-50 sm:w-auto ${
                 consent === 'setuju'
                   ? 'bg-ch-brand text-white ring-4 ring-ch-brand/20 hover:bg-ch-brand-hover'
                   : 'border-2 border-ch-brand bg-[#eaf6f8] text-ch-teal hover:bg-[#d9f3f6]'
               }`}
             >
-              <Play className="size-5 fill-current" /> Mulai Rekam
+              <Play className="size-5 fill-current" /> {busy ? 'Menyiapkan Rekaman…' : consent !== 'setuju' ? 'Setuju & Mulai Rekam' : resumableSession ? 'Lanjutkan Rekaman' : error ? 'Coba Rekam Lagi' : 'Mulai Rekam'}
             </button>
           </> : <>
-            <button type="button" className="inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266]" onClick={() => { if (paused) recorder.current?.resume(); else recorder.current?.pause(); setPaused(!paused) }}>{paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{paused ? 'Lanjutkan' : 'Jeda'}</button>
+            <button type="button" disabled={busy || uploadFailed} className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] disabled:opacity-50" onClick={() => { if (paused) recorder.current?.resume(); else recorder.current?.pause(); setPaused(!paused) }}>{paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{paused ? 'Lanjutkan Rekaman' : 'Jeda'}</button>
             <button type="button" className="inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-[12px] bg-[#b42727] px-7 text-[16px] font-bold text-white shadow-md ring-4 ring-[#b42727]/20 transition-colors hover:bg-[#922020] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b42727] sm:w-auto" onClick={() => recorder.current?.stop()}><Square className="size-5 fill-current" /> Berhenti Rekam</button>
           </>}
         </div>
@@ -498,8 +540,8 @@ export function SubjectivePage({ data }: { data: Consultation }) {
             : <EmptyBox title={recording ? 'Mendengarkan percakapan…' : 'Belum ada rekaman berlangsung'}>{recording ? 'Transkrip muncul bertahap selama rekaman berjalan.' : <>Klik tombol <b className="font-semibold text-ch-brand">"Mulai Rekam"</b> untuk menyimpan dan mentranskripsi dialog<br />percakapan dokter-pasien secara otomatis.</>}</EmptyBox>}
         </Card>
         <Card title="Subjektif" badge={recording ? 'Merekam' : 'Menunggu Rekaman'} footer={<>
-          <button type="button" disabled={recording} onClick={() => decide('tolak')} className="inline-flex h-10 min-w-[92px] items-center justify-center rounded-[10px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand disabled:opacity-50">Isi Manual</button>
-          <button type="button" disabled={busy || recording} onClick={toObjective} className="inline-flex h-10 min-w-[178px] items-center justify-center rounded-[10px] bg-ch-brand px-5 text-[14px] font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50">Lanjut ke OAP</button>
+          <button type="button" disabled={recording || busy || uploadFailed} onClick={() => decide('tolak')} className="inline-flex h-10 min-w-[92px] items-center justify-center rounded-[10px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand disabled:opacity-50">Isi Manual</button>
+          <button type="button" disabled={busy || recording || uploadFailed} onClick={toObjective} className="inline-flex h-10 min-w-[178px] items-center justify-center rounded-[10px] bg-ch-brand px-5 text-[14px] font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50">Lanjut ke OAP</button>
         </>}>
           <EmptyBox title={recording ? 'Rekaman sedang berjalan' : 'Belum ada rekaman berlangsung'}>{recording ? 'Draf Subjektif disusun AI setelah rekaman selesai.' : <>Klik tombol <b className="font-semibold text-ch-brand">"Mulai Rekam"</b> untuk<br />mencatata Subjektif secara otomatis.</>}</EmptyBox>
         </Card>

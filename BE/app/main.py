@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -732,13 +733,27 @@ async def upload_audio(visit_id: int, audio: UploadFile = File(...),
     return {"session_id": ss.id, "status": "ok"}
 
 
+@app.post("/visits/{visit_id}/audio-start")
+def audio_start(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                db: Session = Depends(get_db)):
+    v = get_assigned_visit(db, visit_id, user)
+    path = settings.audio_dir / f"visit{v.id}-{uuid4().hex}.webm"
+    ss = _start_session(db, v, user, str(path), status="recording")
+    path.write_bytes(b"")
+    return {"status": "ok", "session_id": ss.id, "next_seq": 0}
+
+
 @app.post("/visits/{visit_id}/audio-chunk")
 async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = File(...),
                       session_id: int | None = Form(None),
                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                       db: Session = Depends(get_db)):
     v = get_assigned_visit(db, visit_id, user)
-    if seq == 0:
+    if v.consent is None or v.consent.decision != "setuju":
+        raise HTTPException(403, "Belum ada persetujuan pasien.")
+    if v.note and v.note.approved_snapshot:
+        raise HTTPException(409, "Catatan sudah divalidasi.")
+    if seq == 0 and session_id is None:
         path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}.webm"
         ss = _start_session(db, v, user, str(path), status="recording")
         path.write_bytes(b"")
@@ -766,7 +781,11 @@ def audio_finish(visit_id: int, session_id: int = Form(...),
                  db: Session = Depends(get_db)):
     v = get_assigned_visit(db, visit_id, user)
     ss = db.get(ScribeSession, session_id)
-    if ss is None or ss.visit_id != v.id or ss.status != "recording":
+    if ss is None or ss.visit_id != v.id:
+        raise HTTPException(409, "Sesi rekaman tidak aktif.")
+    if ss.status in ("queued", "transcribing", "refining", "extracting", "coding", "done"):
+        return {"session_id": ss.id, "status": "ok"}
+    if ss.status != "recording":
         raise HTTPException(409, "Sesi rekaman tidak aktif.")
     ss.status = "queued"
     ss.closed_at = ss.last_activity_at = utcnow()
@@ -806,14 +825,50 @@ def recording_recovery(visit_id: int, user: User = Depends(require(*ROLE_MATRIX[
 def resume_recording(visit_id: int, session_id: int,
                      user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                      db: Session = Depends(get_db)):
-    get_assigned_visit(db, visit_id, user)
-    ss = _recoverable_recording(db, visit_id, session_id)
+    v = get_assigned_visit(db, visit_id, user)
+    if not v.consent or v.consent.decision != "setuju":
+        raise HTTPException(403, "Belum ada persetujuan pasien.")
+    if v.note and v.note.approved_snapshot:
+        raise HTTPException(409, "Catatan sudah divalidasi.")
+    ss = db.scalar(select(ScribeSession).where(ScribeSession.id == session_id,
+                   ScribeSession.visit_id == visit_id).with_for_update().execution_options(populate_existing=True))
+    if not ss or ss.status not in ("recording", "done", "failed") or v.latest_session.id != ss.id:
+        raise HTTPException(409, "Sesi ini tidak dapat dilanjutkan. Tunggu pemrosesan selesai atau mulai rekaman baru.")
     if not ss.audio_path or not Path(ss.audio_path).exists():
         raise HTTPException(409, "Berkas rekaman sesi tidak tersedia.")
+    ss.status, ss.error, ss.finished_at = "recording", None, None
+    ss.closed_at, ss.closed_by = None, None
     ss.last_activity_at = utcnow()
+    v.status = "processing"
     audit(db, user, "resume_recording", f"visit:{visit_id}", f"session:{ss.id}")
     db.commit()
     return {"status": "ok", "session_id": ss.id, "next_seq": ss.next_chunk_seq or 0}
+
+
+@app.post("/visits/{visit_id}/scribe/{session_id}/retry")
+def retry_scribe(visit_id: int, session_id: int,
+                 user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                 db: Session = Depends(get_db)):
+    v = get_assigned_visit(db, visit_id, user)
+    ss = db.scalar(select(ScribeSession).where(ScribeSession.id == session_id,
+                   ScribeSession.visit_id == v.id).with_for_update().execution_options(populate_existing=True))
+    if ss is None or ss.status != "failed" or v.latest_session.id != ss.id:
+        raise HTTPException(409, "Hanya sesi terakhir yang gagal dapat dicoba lagi.")
+    if not v.consent or v.consent.decision != "setuju":
+        raise HTTPException(403, "Belum ada persetujuan pasien.")
+    if v.note and v.note.approved_snapshot:
+        raise HTTPException(409, "Catatan sudah divalidasi.")
+    text_transcript = None
+    if not ss.audio_path or ss.audio_deleted_at or not Path(ss.audio_path).exists():
+        text_transcript = "\n".join(segment["text"] for segment in (ss.transcript or []))
+        if not text_transcript.strip():
+            raise HTTPException(409, "Audio dan transkrip tidak tersedia. Silakan rekam ulang.")
+    ss.status, ss.error, ss.finished_at = "queued", None, None
+    v.status = "processing"
+    audit(db, user, "scribe_retry", f"visit:{v.id}", f"session:{ss.id}")
+    db.commit()
+    pipeline.submit(SessionLocal, ss.id, settings, text_transcript=text_transcript)
+    return {"status": "ok", "session_id": ss.id}
 
 
 @app.post("/visits/{visit_id}/recording-recovery/{session_id}/abandon")

@@ -154,7 +154,7 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
 
           {sekunderList.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-t border-[#d4edf2] pt-2">
-              <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Maks {sekunderList.length}):</span>
+              <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Maks 3):</span>
               {sekunderList.map((item, idx) => {
                 const isPrimary = s.dx[0]?.icd?.code === item.code
                 const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)

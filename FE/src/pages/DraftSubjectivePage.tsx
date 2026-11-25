@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, AudioLines, Check, CheckCircle2, LoaderCircle, Mic, Pause, Play, Quote, X } from 'lucide-react'
+import { AlertTriangle, AudioLines, Check, CheckCircle2, LoaderCircle, Mic, Pause, Play, Quote, RefreshCw, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble } from '@/components/Scribe'
 import { Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
-import { getScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
+import { getScribe, retryScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
 import { mmss } from '@/lib/format'
 import type { Consultation, ExtractionField } from '@/lib/types'
 
@@ -53,11 +53,11 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
     saved,
   } = useConsent(data, setError)
   const scribe = useQuery({
-    queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!data.session,
+    queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!(data.session || data.failed_session),
     refetchInterval: (query) => PROCESSING.includes(query.state.data?.status || data.session?.status || '') ? 1500 : false,
   })
   const status = scribe.data?.status || data.session?.status || ''
-  useEffect(() => { if (status === 'done' && data.session?.status !== 'done') void queryClient.invalidateQueries({ queryKey: ['consultation', id] }) }, [status, data.session?.status, queryClient, id])
+  useEffect(() => { if ((status === 'done' || status === 'failed') && data.session?.status !== status) void queryClient.invalidateQueries({ queryKey: ['consultation', id] }) }, [status, data.session?.status, queryClient, id])
 
   const draftFields = dirty ? fields : { ...fields, ...(scribe.data?.fields || {}) }
   const draftSummary = dirty ? summary : scribe.data?.summary || summary
@@ -65,6 +65,20 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const extraction = (scribe.data?.extraction || data.session?.extraction || {}) as Record<string, ExtractionField | string | unknown>
   const processing = PROCESSING.includes(status)
   const failed = status === 'failed' || (!data.session && !!data.failed_session)
+
+  async function retryProcessing() {
+    const sessionId = data.failed_session?.id || data.session?.id
+    if (!sessionId || busy) return
+    setBusy(true); setError('')
+    try {
+      await saved()
+      await retryScribe(id, sessionId)
+      await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
+      await queryClient.invalidateQueries({ queryKey: ['scribe', id] })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Pemrosesan belum berhasil diulang.')
+    } finally { setBusy(false) }
+  }
 
   const [activeCitation, setActiveCitation] = useState<{
     fieldKey: string
@@ -159,7 +173,7 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
     if (audio.paused) { void audio.play(); setPlaying(true) } else { audio.pause(); setPlaying(false) }
   }
 
-  const soft = 'inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand hover:text-ch-teal disabled:opacity-50'
+  const soft = 'inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-3 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand hover:text-ch-teal disabled:opacity-50'
   const pillLabel = processing ? statusLabel[status] : failed ? 'Pemrosesan Gagal' : 'Rekaman Tersimpan'
 
   return <div className="space-y-[25px]">
@@ -183,14 +197,16 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
     {redirectReason && <Notice tone="info">{redirectReason}</Notice>}
     {error && <Notice tone="bad">{error}</Notice>}
 
-    <section className="flex min-h-[115px] flex-wrap items-center gap-4 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4" aria-live="polite">
-      <span className={`inline-flex h-[38px] items-center gap-2.5 rounded-[8px] border px-3.5 text-[14px] font-semibold ${failed ? 'border-[#f3b6b6] bg-ch-bad-soft text-ch-bad' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}>{processing ? <LoaderCircle className="size-4 animate-spin" /> : <span className={`size-2 rounded-full ${failed ? 'bg-ch-bad' : 'bg-[#0b6e7d]'}`} />}{pillLabel}</span>
-      <p className="font-inter text-[22px] font-bold tabular-nums text-[#3f4c55]">{mmss(scribe.data?.duration_s || 0)} <span className="font-jakarta text-[15px] font-semibold text-[#5f7284]">menit</span></p>
-      <div className="mx-auto hidden h-px w-[265px] border-t-2 border-dashed border-[#5cc9d8] lg:block" aria-hidden />
-      <div className="ml-auto flex flex-wrap gap-4">
+    <section className="flex min-h-[88px] flex-wrap items-center gap-3 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4 lg:flex-nowrap" aria-live="polite">
+      <span className={`inline-flex h-[38px] shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[8px] border px-3.5 text-[14px] font-semibold ${failed ? 'border-[#f3b6b6] bg-ch-bad-soft text-ch-bad' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}>{processing ? <LoaderCircle className="size-4 animate-spin" /> : <span className={`size-2 rounded-full ${failed ? 'bg-ch-bad' : 'bg-[#0b6e7d]'}`} />}{pillLabel}</span>
+      <p className="shrink-0 whitespace-nowrap font-inter text-[22px] font-bold tabular-nums text-[#3f4c55]">{mmss(scribe.data?.duration_s || 0)} <span className="font-jakarta text-[15px] font-semibold text-[#5f7284]">menit</span></p>
+      <div className="mx-auto hidden h-0 max-w-[120px] flex-1 border-t-2 border-dashed border-[#5cc9d8] lg:block" aria-hidden />
+      <div className="ml-auto flex flex-wrap items-center gap-2 lg:flex-nowrap">
         {data.session?.has_audio && <audio ref={audioRef} preload="none" src={visitPath(id, `/audio/${data.session.id}`)} onEnded={() => setPlaying(false)} />}
         <button type="button" className={soft} onClick={togglePlay} disabled={!data.session?.has_audio}>{playing ? <Pause className="size-3.5" /> : <Play className="size-3 fill-current" />} {playing ? 'Jeda' : 'Putar Ulang'}</button>
-        <button type="button" className={soft} onClick={() => navigate(`/kunjungan/${id}/subjektif`)}><Mic className="size-4" /> Rekam Ulang</button>
+        {failed && <button type="button" className={soft} disabled={busy || consent !== 'setuju'} onClick={retryProcessing}><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />{busy ? 'Mencoba Lagi…' : 'Coba Proses Lagi'}</button>}
+        {(status === 'recording' || (status === 'done' && data.session?.has_audio)) && <button type="button" className={soft} disabled={busy} onClick={() => navigate(`/kunjungan/${id}/subjektif`, { state: { resumeSessionId: data.session?.id } })}><Play className="size-4" /> Lanjutkan Rekaman</button>}
+        <button type="button" className={soft} disabled={busy || processing} onClick={() => navigate(`/kunjungan/${id}/subjektif`)}><Mic className="size-4" /> Rekam Ulang</button>
       </div>
     </section>
 

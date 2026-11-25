@@ -1,9 +1,13 @@
 import pytest
+import asyncio
+from io import BytesIO
+from fastapi import UploadFile
 from fastapi import HTTPException
 from starlette.requests import Request
 from sqlalchemy import func, select
 
-from app.main import (_reject_duplicate_nik, _sign, abandon_recording, current_user, recording_recovery,
+from app.main import (_reject_duplicate_nik, _sign, abandon_recording, audio_chunk, audio_finish,
+                      current_user, recording_recovery, retry_scribe,
                       require, resume_recording, set_consent, settings)
 from app.models import ConsentHistory, Patient, ScribeSession
 from app.services.notes import ApprovalError, approve_and_queue, correct_identity_and_queue, requeue
@@ -95,6 +99,7 @@ def test_same_bundle_retry_rejects_identity_error(db, visit_with_note, doctor, m
 
 
 def test_interrupted_recording_can_resume_or_be_closed(db, doctor, visit_with_note, tmp_path):
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
     audio = tmp_path / "partial.webm"
     audio.write_bytes(b"partial audio")
     session = ScribeSession(visit_id=visit_with_note.id, audio_path=str(audio), status="recording",
@@ -110,3 +115,90 @@ def test_interrupted_recording_can_resume_or_be_closed(db, doctor, visit_with_no
     assert not audio.exists()
     db.refresh(session)
     assert session.status == "abandoned"
+
+
+def test_resumed_chunks_and_retries_preserve_audio(db, doctor, visit_with_note, tmp_path, monkeypatch):
+    from app.main import pipeline
+    monkeypatch.setattr(pipeline, 'submit_live', lambda *args: None)
+    monkeypatch.setattr(pipeline, 'submit', lambda *args, **kwargs: None)
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
+    audio = tmp_path / 'resume.webm'
+    audio.write_bytes(b'first')
+    ss = ScribeSession(visit_id=visit_with_note.id, audio_path=str(audio), status='recording', next_chunk_seq=1)
+    db.add(ss)
+    db.commit()
+    resumed = resume_recording(visit_with_note.id, ss.id, doctor, db)
+    for _ in range(2):
+        asyncio.run(audio_chunk(visit_with_note.id, resumed['next_seq'],
+                    UploadFile(filename='chunk.webm', file=BytesIO(b'second')), ss.id, doctor, db))
+    assert audio.read_bytes() == b'firstsecond'
+    assert ss.next_chunk_seq == 2
+    audio_finish(visit_with_note.id, ss.id, doctor, db)
+    assert audio_finish(visit_with_note.id, ss.id, doctor, db)['status'] == 'ok'
+
+
+def test_first_chunk_retry_uses_existing_session(db, doctor, visit_with_note, tmp_path, monkeypatch):
+    from app.main import pipeline
+    monkeypatch.setattr(pipeline, 'submit_live', lambda *args: None)
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
+    audio = tmp_path / 'first.webm'
+    audio.write_bytes(b'')
+    ss = ScribeSession(visit_id=visit_with_note.id, audio_path=str(audio), status='recording', next_chunk_seq=0)
+    db.add(ss)
+    db.commit()
+    for _ in range(2):
+        result = asyncio.run(audio_chunk(visit_with_note.id, 0,
+                            UploadFile(filename='chunk.webm', file=BytesIO(b'first')), ss.id, doctor, db))
+        assert result['session_id'] == ss.id
+    assert audio.read_bytes() == b'first'
+
+
+def test_completed_recording_can_continue_but_processing_cannot(db, doctor, visit_with_note, tmp_path):
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
+    audio = tmp_path / 'completed.webm'
+    audio.write_bytes(b'saved audio')
+    ss = ScribeSession(visit_id=visit_with_note.id, audio_path=str(audio), status='done', next_chunk_seq=4)
+    db.add(ss)
+    db.commit()
+    db.refresh(visit_with_note)
+    assert resume_recording(visit_with_note.id, ss.id, doctor, db)['next_seq'] == 4
+    assert ss.status == 'recording'
+    assert audio.read_bytes() == b'saved audio'
+    ss.status = 'extracting'
+    db.commit()
+    with pytest.raises(HTTPException) as processing:
+        resume_recording(visit_with_note.id, ss.id, doctor, db)
+    assert processing.value.status_code == 409
+
+
+def test_failed_scribe_retry_retains_transcript_and_rejects_duplicate(db, doctor, visit_with_note, monkeypatch):
+    from app.main import pipeline
+    calls = []
+    monkeypatch.setattr(pipeline, 'submit', lambda *args, **kwargs: calls.append((args, kwargs)))
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
+    ss = ScribeSession(visit_id=visit_with_note.id, status='failed', error='timeout',
+                       transcript=[{'i': 0, 'text': 'Demam sejak kemarin.'}])
+    db.add(ss)
+    db.commit()
+    db.refresh(visit_with_note)
+    assert retry_scribe(visit_with_note.id, ss.id, doctor, db)['session_id'] == ss.id
+    assert ss.status == 'queued'
+    assert ss.error is None
+    assert calls[0][1]['text_transcript'] == 'Demam sejak kemarin.'
+    with pytest.raises(HTTPException) as duplicate:
+        retry_scribe(visit_with_note.id, ss.id, doctor, db)
+    assert duplicate.value.status_code == 409
+
+
+def test_failed_scribe_retry_requires_source_and_consent(db, doctor, visit_with_note):
+    ss = ScribeSession(visit_id=visit_with_note.id, status='failed')
+    db.add(ss)
+    db.commit()
+    db.refresh(visit_with_note)
+    with pytest.raises(HTTPException) as no_consent:
+        retry_scribe(visit_with_note.id, ss.id, doctor, db)
+    assert no_consent.value.status_code == 403
+    set_consent(visit_with_note.id, 'setuju', 'Pasien', 'pasien', doctor, db)
+    with pytest.raises(HTTPException) as no_source:
+        retry_scribe(visit_with_note.id, ss.id, doctor, db)
+    assert no_source.value.status_code == 409
