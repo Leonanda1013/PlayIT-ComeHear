@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { AudioLines, Check, CheckCheck, CircleCheck, ClipboardCheck, FileText, LoaderCircle, MessageSquareText, Pause, Play, Send, ShieldCheck, Sparkles } from 'lucide-react'
+import { AudioLines, Check, CheckCheck, CircleCheck, ClipboardCheck, FileText, LoaderCircle, MessageSquareText, Pause, Play, Send, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroundedPreview } from './GroundedPreview'
 import { Badge } from '@/components/ui/kit'
