@@ -114,6 +114,9 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             # Salinan baru: ekstraksi menulis label pembicara ke tiap segmen. Mengubah objek JSON yang
             # sedang dilacak SQLAlchemy di tempat tidak terdeteksi sebagai perubahan, sehingga label hilang.
             segments = [dict(s) for s in segments]
+            # Simpan sebelum LLM agar transkrip tetap tersedia untuk retry bila ekstraksi gagal.
+            ss.transcript = [dict(segment) for segment in segments]
+            db.commit()
 
             t = step("extracting")
             raw_text = "\n".join(s["text"] for s in segments)

@@ -72,6 +72,7 @@ export function ConsentBlock({
   givenByName,
   relation = 'pasien',
   onUpdateGiver,
+  onAgreeAndStart,
 }: {
   consent: Decision
   onDecide: (decision: 'setuju' | 'tolak', giver?: string, rel?: string) => void
@@ -80,6 +81,7 @@ export function ConsentBlock({
   givenByName?: string
   relation?: string
   onUpdateGiver?: (name: string, rel: string) => void
+  onAgreeAndStart?: () => void
 }) {
   const [showTerms, setShowTerms] = useState(false)
   const [showConfirmSetuju, setShowConfirmSetuju] = useState(false)
@@ -90,7 +92,8 @@ export function ConsentBlock({
     if (consent === 'tolak') {
       setShowConfirmSetuju(true)
     } else {
-      onDecide('setuju', currentGiver, relation)
+      if (onAgreeAndStart) onAgreeAndStart()
+      else onDecide('setuju', currentGiver, relation)
     }
   }
 
@@ -131,18 +134,21 @@ export function ConsentBlock({
             </button>
           </div>
           <div>
-            <div role="radiogroup" aria-label="Persetujuan perekaman" className="space-y-2">
+            {onAgreeAndStart && <p className="mb-2 text-xs leading-5 text-[#4a5f70]">Pasien atau wali: setelah memahami penjelasan, tekan <strong>Setuju &amp; Mulai Rekam</strong> untuk menyetujui perekaman dan pemrosesan AI di atas. Rekaman dapat dijeda kapan saja. Menolak tidak mengurangi pelayanan.</p>}
+            <div role={onAgreeAndStart ? 'group' : 'radiogroup'} aria-label="Persetujuan perekaman" className="space-y-2">
               <ConsentOption
                 active={consent === 'setuju'}
                 disabled={disabled}
                 onClick={handleSelectSetuju}
+                action={!!onAgreeAndStart}
               >
-                Pasien Menyetujui Perekaman (AI Scribe Aktif)
+                {onAgreeAndStart ? 'Setuju & Mulai Rekam' : 'Pasien Menyetujui Perekaman (AI Scribe Aktif)'}
               </ConsentOption>
               <ConsentOption
                 active={consent === 'tolak'}
                 disabled={disabled}
                 onClick={() => onDecide('tolak', currentGiver, relation)}
+                action={!!onAgreeAndStart}
               >
                 Pasien Menolak Perekaman (Pencatatan Manual)
               </ConsentOption>
@@ -197,7 +203,7 @@ export function ConsentBlock({
               )}
             </div>
 
-            <p className="mt-2 text-[11px] text-[#8a9bad]">Diverifikasi verbal oleh perawat/dokter saat pasien masuk.</p>
+            <p className="mt-2 text-[11px] text-[#8a9bad]">{onAgreeAndStart ? 'Tenaga medis menjelaskan ketentuan sebelum pasien atau wali menekan tombol. Izin mikrofon browser diminta setelah persetujuan tersimpan.' : 'Diverifikasi verbal oleh perawat/dokter saat pasien masuk.'}</p>
           </div>
         </div>
         <div className="h-[30px]" />
@@ -274,11 +280,12 @@ export function ConsentBlock({
               type="button"
               onClick={() => {
                 setShowConfirmSetuju(false)
-                onDecide('setuju', currentGiver, relation)
+                if (onAgreeAndStart) onAgreeAndStart()
+                else onDecide('setuju', currentGiver, relation)
               }}
               className="inline-flex h-9 items-center rounded-[8px] bg-ch-brand px-4 text-[13px] font-semibold text-white hover:bg-ch-brand-hover shadow-sm"
             >
-              Ya, Pasien Menyetujui
+              {onAgreeAndStart ? 'Setuju & Mulai Rekam' : 'Ya, Pasien Menyetujui'}
             </button>
           </div>
         </div>
@@ -287,8 +294,8 @@ export function ConsentBlock({
   )
 }
 
-function ConsentOption({ active, disabled, onClick, children }: { active: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" role="radio" aria-checked={active} disabled={disabled} onClick={onClick}
+function ConsentOption({ active, disabled, onClick, children, action }: { active: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode; action?: boolean }) {
+  return <button type="button" role={action ? undefined : 'radio'} aria-checked={action ? undefined : active} disabled={disabled} onClick={onClick}
     className={`flex h-9 w-full items-center gap-2.5 rounded-full border px-3 text-left text-[13px] transition-colors disabled:cursor-not-allowed ${active ? 'border-[#8fd6e1] bg-[#dff4f7] font-medium text-[#0b6e7d]' : 'border-[#dce6eb] bg-[#f8fbfc] text-[#33475b] hover:bg-[#eef6f8]'}`}>
     <span className={`grid size-3.5 shrink-0 place-items-center rounded-full border ${active ? 'border-[#0b8597] bg-white' : 'border-[#5f7284] bg-white'}`}>{active && <span className="size-2 rounded-full bg-[#0b8597]" />}</span>{children}
   </button>
