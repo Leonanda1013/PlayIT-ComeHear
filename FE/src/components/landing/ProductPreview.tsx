@@ -1,31 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AudioLines, Check, CheckCheck, CircleCheck, ClipboardCheck, FileText, LoaderCircle, MessageSquareText, Pause, Play, Send, ShieldCheck, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { GroundedPreview } from './GroundedPreview'
 import { Badge } from '@/components/ui/kit'
 
 export function Waveform({ playing = false }: { playing?: boolean }) {
   return <div className={`lp-waveform ${playing ? 'is-playing' : ''}`} aria-hidden="true">
     {Array.from({ length: 43 }, (_, i) => <span key={i} style={{ height: `${8 + ((i * 17 + 11) % 33)}px`, animationDelay: `${i * -73}ms` }} />)}
-  </div>
-}
-
-function Transcript({ compact = false }: { compact?: boolean }) {
-  return <div className="lp-transcript">
-    <div className="lp-preview-label"><MessageSquareText size={17} /><h3>Transkrip percakapan</h3></div>
-    <div className="lp-dialogue"><div><strong>Dokter</strong><time>00:08</time></div><p>Apa yang dirasakan hari ini?</p></div>
-    <div className="lp-dialogue patient"><div><strong>Pasien contoh</strong><time>00:12</time></div><p>Batuk sejak tiga hari yang lalu, Dok. Tenggorokan juga terasa tidak nyaman.</p></div>
-    {!compact && <div className="lp-dialogue"><div><strong>Dokter</strong><time>00:24</time></div><p>Apakah ada demam atau sesak napas?</p></div>}
-    <div className="lp-dialogue patient"><div><strong>Pasien contoh</strong><time>00:31</time></div><p>Tidak ada demam atau sesak. Belum minum obat.</p></div>
-  </div>
-}
-
-function Subjective() {
-  return <div className="lp-subjective">
-    <div className="lp-preview-label"><Sparkles size={17} /><h3>Draf Subjektif</h3><Badge tone="info">Draf AI</Badge></div>
-    <div className="lp-note-block"><h4>Keluhan utama</h4><p>Batuk sejak 3 hari yang lalu.</p></div>
-    <div className="lp-note-block"><h4>Riwayat penyakit sekarang</h4><p>Batuk disertai rasa tidak nyaman di tenggorokan. Pasien menyangkal demam dan sesak napas.</p></div>
-    <div className="lp-note-block"><h4>Riwayat pengobatan</h4><p>Belum mengonsumsi obat untuk keluhan ini.</p></div>
-    <div className="lp-review-hint"><ClipboardCheck size={16} /><span>Perlu ditinjau dan dilengkapi dokter</span></div>
   </div>
 }
 
@@ -36,7 +17,7 @@ export function HeroPreview() {
       <div className="lp-window-header"><div className="lp-window-title"><AudioLines size={21} /><h2>Ruang konsultasi</h2></div><Badge>Data contoh</Badge></div>
       <div className="lp-mini-steps"><span className="active">Subjektif</span><span>Objektif</span><span>Asesmen & Plan</span><span>Validasi</span></div>
       <div className="lp-recording-static"><span className="lp-mic-icon"><AudioLines size={19} /></span><div><strong>Rekaman konsultasi</strong><span>Simulasi · tanpa akses mikrofon</span></div><Waveform /><span className="lp-timer">00:42</span></div>
-      <div className="lp-clinical-columns"><Transcript compact /><Subjective /></div>
+      <GroundedPreview compact />
       <div className="lp-window-footer"><ShieldCheck size={15} /><span>Draf AI membantu. Dokter tetap memegang kendali.</span></div>
     </div>
     <div className="lp-visual-caption"><span className="lp-caption-icon"><CheckCheck size={20} /></span><div><strong>Terstruktur sejak percakapan</strong><span>Siap untuk ditinjau, dilengkapi, dan divalidasi.</span></div></div>
@@ -44,7 +25,7 @@ export function HeroPreview() {
 }
 
 const tabs = [
-  { label: 'Transkrip & Subjektif', icon: MessageSquareText, description: 'Percakapan menjadi transkrip dan draf Subjektif. Dokter memeriksa isinya sebelum melanjutkan.' },
+  { label: 'Transkrip & Subjektif', icon: MessageSquareText, description: 'Draf dilengkapi sitasi transkrip (grounding) dan peringatan informasi ambigu. Pilih sitasi untuk melihat sumber, lalu dokter memeriksa draf.' },
   { label: 'Tinjauan SOAP', icon: ClipboardCheck, description: 'SOAP adalah Subjektif, Objektif, Asesmen, dan Plan. Dokter melengkapi O, A, P serta memvalidasi seluruh dokumentasi.' },
   { label: 'Pemantauan Pengiriman', icon: Send, description: 'Status kunjungan dan status pengiriman dipantau terpisah. Pengiriman mengikuti persetujuan dokter dan konfigurasi integrasi.' },
 ]
@@ -97,11 +78,11 @@ export function ProductDemo() {
           {playState === 'loading' ? 'Menyiapkan…' : playState === 'playing' ? 'Jeda simulasi' : seconds === 42 ? 'Ulangi simulasi' : 'Putar simulasi'}
         </Button><Waveform playing={playState === 'playing'} /><span className="lp-timer">00:{String(seconds).padStart(2, '0')} / 00:42</span></div>
         <p className="lp-simulation-note" role="status">{playState === 'playing' ? 'Simulasi visual berjalan. Tanpa audio atau akses mikrofon.' : 'Preview memakai contoh yang telah disiapkan. Tanpa audio atau akses mikrofon.'}</p>
-        <div className="lp-clinical-columns"><Transcript /><Subjective /></div>
+        <GroundedPreview />
       </>}
       {index === 1 && <div className="lp-soap-demo">
         <div className="lp-soap-summary"><h3>Tinjauan dokumentasi</h3><Badge tone="warn">Menunggu validasi dokter</Badge></div>
-        <div className="lp-soap-row"><span>S</span><div><h4>Subjektif <Badge tone="info">Draf AI</Badge></h4><p>Batuk sejak 3 hari, tenggorokan tidak nyaman. Tidak ada demam atau sesak. Belum minum obat.</p></div></div>
+        <div className="lp-soap-row"><span>S</span><div><h4>Subjektif <Badge tone="info">Draf AI · Grounded</Badge></h4><p>Batuk disertai tenggorokan tidak nyaman. Demam dan sesak disangkal. Belum minum obat.</p><p className="lp-soap-warning">Perlu dicek: durasi “tiga hari” dan “seminggu” pada sitasi [1], [3] belum konsisten. Dokter perlu mengonfirmasi sebelum finalisasi.</p></div></div>
         <div className="lp-soap-row"><span>O</span><div><h4>Objektif <small>Contoh isian dokter</small></h4><p>Keadaan umum baik. Suhu 36,7 °C. Frekuensi napas 18 kali/menit.</p></div></div>
         <div className="lp-soap-row"><span>A</span><div><h4>Asesmen <small>Keputusan dokter</small></h4><p>Usulan ICD-10: <strong>R05 — Batuk</strong>. Kode dari klasifikasi penyakit internasional ini perlu ditinjau dokter.</p></div></div>
         <div className="lp-soap-row"><span>P</span><div><h4>Plan <small>Contoh isian dokter</small></h4><p>Rencana tindak lanjut dan edukasi diisi dokter sesuai hasil pemeriksaan.</p></div></div>
