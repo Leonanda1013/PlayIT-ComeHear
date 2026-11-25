@@ -119,8 +119,20 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             db.commit()
 
             t = step("extracting")
-            raw_text = "\n".join(s["text"] for s in segments)
-            subjective, models["extract_llm"] = extract_subjective(segments, llm)
+            visit = ss.visit
+            patient = visit.patient if visit else None
+            practitioner = visit.practitioner if visit else None
+            nama_pasien = patient.name if patient else None
+            nama_dokter = practitioner.name if practitioner else None
+            alamat_pasien = patient.address if patient else None
+
+            subjective, models["extract_llm"] = extract_subjective(
+                segments,
+                llm,
+                nama_pasien=nama_pasien,
+                nama_dokter=nama_dokter,
+                alamat_pasien=alamat_pasien,
+            )
             ss.transcript = segments
             ss.extraction = subjective
             timings["extract_s"] = round(time.perf_counter() - t, 1)
@@ -128,7 +140,6 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             if ss.status == "replaced":
                 raise Replaced()
 
-            visit = ss.visit
             note = visit.note or ClinicalNote(visit_id=visit.id)
             note.subjective = {k: subjective[k]["nilai"] or "" for k in SUBJECTIVE_FIELDS}
             note.subjective_summary = subjective["rangkuman_s"]
@@ -137,7 +148,7 @@ def run_session(session_factory, session_id: int, settings: Settings, text_trans
             visit.status = "draft"
             t = step("coding")  # S sudah tampil di layar review; ICD menyusul
 
-            keywords = subjective.get("kata_kunci_icd10_en") or icd_keywords(raw_text, llm)
+            keywords = subjective.get("kata_kunci_icd10_en") or icd_keywords(subjective.get("rangkuman_s") or "", llm)
             icd, models["icd"] = icd_pick(subjective, keywords, icd_table(settings), llm)
             ss.icd_suggestions = icd
             timings["icd_s"] = round(time.perf_counter() - t, 1)

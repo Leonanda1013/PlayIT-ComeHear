@@ -60,8 +60,8 @@ def test_pipeline_text_to_draft_with_mock(session_factory, db, visit_with_note, 
 
     original_extract = pl.extract_subjective
 
-    def extract_with_keywords(segments, llm):
-        result, model = original_extract(segments, llm)
+    def extract_with_keywords(segments, llm, *args, **kwargs):
+        result, model = original_extract(segments, llm, *args, **kwargs)
         result["kata_kunci_icd10_en"] = ["fever", "headache"]
         return result, model
 
@@ -429,6 +429,50 @@ def test_clean_clinical_transcript_corrections():
     assert "mudah dicerna" in clean_clinical_transcript("makanan yang mudah di jernah")
     assert "obat anti diare" in clean_clinical_transcript("ini ada opat antidiari")
     assert "dituku di apotek" in clean_clinical_transcript("obate dituduh di apotek")
+
+
+def test_anonimkan_pii_comprehensive():
+    from app.scribe.extract import anonimkan
+
+    text = (
+        "Pagi dokter James, saya Vincentius Leonanda. Saya tinggal di Jl. Melati Raya No. 12, "
+        "kuliah di Universitas Indonesia, kos di Margonda, dan kerja part time di PT Shopee Indonesia. "
+        "NIK saya 3171012345678901, BPJS 0001234567890, telp 081234567890. "
+        "Keluhan batuk di dada, nyeri di ulu hati, demam di malam hari, beli obat di apotek."
+    )
+
+    masked = anonimkan(
+        text,
+        nama_pasien="Vincentius Leonanda Prabowo",
+        nama_dokter="dr. James Pratama",
+        alamat_pasien="Jl. Melati Raya No. 12, Kebayoran Baru, Jakarta Selatan",
+    )
+
+    # Pastikan identitas pribadi dan kuasi tersamarkan
+    assert "[PASIEN]" in masked
+    assert "Vincentius" not in masked
+    assert "[DOKTER]" in masked
+    assert "James" not in masked
+    assert "[ALAMAT]" in masked
+    assert "Melati Raya" not in masked
+    assert "Margonda" not in masked
+    assert "[KAMPUS]" in masked
+    assert "Universitas Indonesia" not in masked
+    assert "[INSTANSI]" in masked
+    assert "Shopee" not in masked
+    assert "[NIK]" in masked
+    assert "3171012345678901" not in masked
+    assert "[NO_BPJS]" in masked
+    assert "0001234567890" not in masked
+    assert "[TELP]" in masked
+    assert "081234567890" not in masked
+
+    # Pastikan istilah klinis/medis TIDAK tersensor
+    assert "batuk di dada" in masked
+    assert "nyeri di ulu hati" in masked
+    assert "demam di malam hari" in masked
+    assert "beli obat di apotek" in masked
+
 
 
 
