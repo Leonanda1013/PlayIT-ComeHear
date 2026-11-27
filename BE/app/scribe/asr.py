@@ -73,7 +73,9 @@ PHONETIC_CORRECTIONS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bbatunya(?=\s+(?:kering|berdaha[k]?|cair|sudah|udah|muncul|terasa|kambuh|kampu|lama|nggak|tidak))", re.I), "batuknya"),
     (re.compile(r"\bbatu(?=\s+(?:berdaha[k]?|kering|lama|kronis))", re.I), "batuk"),
     (re.compile(r"\bberdaha\b", re.I), "berdahak"),
-    (re.compile(r"\bsessana\s*fas\b|\bseseat\s+nafas\b|\bsesak\s+nafas\b", re.I), "sesak napas"),
+    (re.compile(r"\bsessana\s*fas\b|\bses[ae]t\s+na[fp]as\b|\bsesak\s+nafas\b", re.I), "sesak napas"),
+    (re.compile(r"\bkongreges\b", re.I), "kok nggreges"),
+    (re.compile(r"\b(bunyi[,\s]+)(?:mik|nik)[-\s]+(?:mik|nik)\b", re.I), r"\1ngik-ngik"),
     (re.compile(r"\bbersing[-\s]?bersing\b", re.I), "bersin-bersin"),
     (re.compile(r"\bkampu\b", re.I), "kambuh"),
     (re.compile(r"\btekanan\s+daerah\b", re.I), "tekanan darah"),
@@ -91,6 +93,20 @@ PHONETIC_CORRECTIONS: list[tuple[re.Pattern, str]] = [
 
     # Negasi klinis & dialek Jawa Krama/Ngoko
     (re.compile(r"\basmat\s+kita\s+ada\b", re.I), "asma tidak ada"),
+    (
+        re.compile(
+            r"\bendah(?=\s+(?:pakai|sembuh|ada|bisa|mau|pernah|minum|makan|tidur|keluar|naik|turun|hilang|berkurang|sampai|tahan|kuat|tahu|tau))\b",
+            re.I,
+        ),
+        "ndak",
+    ),
+    (
+        re.compile(
+            r"\bhendak(?=\s+(?:sembuh|ada|pernah|tahu|tau|hilang|berkurang|tahan|kuat|kambuh|demam|batuk|sesak|mual|muntah))\b",
+            re.I,
+        ),
+        "ndak",
+    ),
     (re.compile(r"\b(?:buat\s+)?ternenten\b", re.I), "mboten enten"),
     (re.compile(r"\bboten\s+enten\b", re.I), "mboten enten"),
     (re.compile(r"\bm?boten\s+wanton\b", re.I), "mboten wonten"),

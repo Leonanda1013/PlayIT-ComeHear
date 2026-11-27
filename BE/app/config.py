@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-5-5"
     claude_models: str = "claude-sonnet-5-5,claude-haiku-5-5"
-    claude_max_tokens: int = Field(default=4096, ge=1, le=65536)
+    claude_max_tokens: int = Field(default=8192, ge=1, le=65536)
     claude_prompt_cache: bool = True
     claude_prompt_cache_min_chars: int = Field(default=1024, ge=0, le=100000)
     claude_thinking_disabled: bool = False
