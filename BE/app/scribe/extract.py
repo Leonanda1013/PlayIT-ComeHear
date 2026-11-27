@@ -15,7 +15,17 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from app.scribe.icd import IcdRow, IndeksICD10, JUMLAH_KANDIDAT, _indeks_dari_rows, expand_keywords, get_icd_index, postprocess, retrieve
+from app.scribe.icd import (
+    IcdRow,
+    IndeksICD10,
+    JUMLAH_KANDIDAT,
+    _indeks_dari_rows,
+    expand_keywords,
+    get_icd_index,
+    is_gp_appropriate,
+    postprocess,
+    retrieve,
+)
 from app.scribe.llm import LLM
 from app.scribe.schemas import (
     SUBJECTIVE_FIELDS,
@@ -159,20 +169,22 @@ _ATURAN_S_DASAR = (
 
 SYSTEM_ICD_KEYWORDS = (
     SYSTEM
-    + "\nUbah data klinis pasien menjadi 5-10 istilah medis Inggris standar ICD-10: prioritaskan "
-    "dugaan diagnosis penyakit/kondisi, sindrom, komplikasi, etiologi yang didukung riwayat, dan "
-    "penyakit penyerta relevan. Sertakan 'dehydration' dan 'volume depletion' HANYA bila ada >=2 tanda "
-    "dehidrasi (haus/tenggorokan kering, lemas, BAK berkurang, mulut kering). Abaikan gejala disangkal."
+    + "\nUbah data klinis pasien menjadi 5-10 istilah medis Inggris standar ICD-10 level Poli Umum (FKTP): "
+    "prioritaskan dugaan diagnosis klinis primer, sindrom, komplikasi nyata, serta komorbid/riwayat kronis. "
+    "Hindari dugaan penyakit spesialistik yang butuh kultur/histologi/biopsi/CT/konfirmasi spesialis bila hanya keluhan akut awal. "
+    "Sertakan 'dehydration' dan 'volume depletion' HANYA bila ada >=2 tanda dehidrasi "
+    "(haus/tenggorokan kering, lemas, BAK berkurang, mulut kering). Abaikan gejala disangkal."
 )
 
 SYSTEM_ICD_RERANK = (
     SYSTEM
-    + "\nPilih kode ICD-10 sebagai USULAN untuk dokter HANYA dari daftar KANDIDAT (salin kode persis):\n"
+    + "\nPilih kode ICD-10 level POLI UMUM (FKTP) sebagai USULAN untuk dokter HANYA dari daftar KANDIDAT (salin kode persis):\n"
     "1. `utama`: 3-4 kode spesifik (pakai subtipe desimal bila tersedia, BUKAN kode induk bersama turunannya), urut keyakinan tertinggi.\n"
-    "2. `sekunder`: list datar maksimal 3 kode HANYA untuk (a) komplikasi nyata yang butuh perhatian/terapi tambahan "
-    "atau (b) penyakit penyerta/riwayat kronis relevan (field `alasan` WAJIB menyebut itu riwayat/komorbid). Kosongkan [] bila tidak memenuhi.\n"
+    "   WAJIB diagnosis yang dapat ditegakkan dokter umum dari anamnesis & pemeriksaan klinik dasar. DILARANG memilih diagnosis yang butuh konfirmasi dokter spesialis, kultur mikrobiologi/virologi spesifik, biopsi/PA, endoskopi, CT/MRI, atau ICU (keganasan, gagal napas, bronkiektasis, varises gaster, kongenital, gastritis atrofik, TB terkonfirmasi, patogen kultur spesifik).\n"
+    "2. `sekunder`: KOSONGKAN [] bila Subjektif & Objektif TIDAK memiliki komplikasi nyata maupun komorbid/riwayat kronis terpisah. "
+    "Bila MEMANG ADA indikasi kondisi sekunder/komorbid/komplikasi, berikan TEPAT 3 pilihan kode ICD-10 terdekat (Top 1-3) urut keyakinan tertinggi (`alasan` wajib menyebut komorbid/RPD atau komplikasinya). Diagnosis kronis spesialistik hanya boleh masuk `sekunder` jika eksplisit disebut sebagai diagnosis lama di RPD.\n"
     "Aturan wajib:\n"
-    "- DILARANG memilih kode gejala (awalan R) bila sudah tercakup diagnosis utama (mis. R10.4/R53/R11/R50 pada gastroenteritis).\n"
+    "- DILARANG memilih kode gejala (awalan R) di `sekunder` bila sudah tercakup diagnosis utama (mis. R10.4/R53/R11/R50 pada gastroenteritis).\n"
     "- DILARANG memilih R34 tanpa bukti pengukuran volume urin terdokumentasi.\n"
     "- Jangan memilih kode induk sekaligus turunannya, jangan pilih kode eksternal (V/W/X/Y), dan jangan pilih gejala yang disangkal.\n"
     "- `keyakinan` (0.0-1.0): >=0.7 jika bukti kuat, 0.3-0.5 jika dugaan awal/riwayat. `alasan` wajib menyebut bukti konkret S/O."
@@ -533,6 +545,168 @@ def _format_clinical_context(
     return keluhan, rps, disangkal, summary, obj_str, rpd
 
 
+_DENIED_RPD_RE = re.compile(
+    r"^(?:-|none|nihil|tidak(?:\s+ada|\s+pernah)?|belum\s+pernah|nggak\s+ada|ga\s+ada|disangkal|tidak_ditemukan)\.?$",
+    re.IGNORECASE,
+)
+_PREGNANCY_CUE_RE = re.compile(r"\b(?:hamil|kehamilan|trimester|nifas|melahirkan|postpartum|antenatal|puerperium|gravida)\b", re.I)
+_NEONATAL_CUE_RE = re.compile(r"\b(?:neonatus|newborn|bayi\s+baru\s+lahir|perinatal)\b", re.I)
+_SECONDARY_CUE_RULES: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
+    (re.compile(r"\b(?:dehidrasi|dehydration|volume\s+depletion|mulut\s+kering|haus\s+sekali)\b", re.I), ("volume depletion", "dehydration")),
+    (re.compile(r"\b(?:hipertensi|darah\s+tinggi|hypertension)\b", re.I), ("essential hypertension", "hypertension")),
+    (re.compile(r"\b(?:diabetes|kencing\s+manis|gula\s+darah)\b", re.I), ("non-insulin-dependent diabetes mellitus", "diabetes mellitus")),
+    (re.compile(r"\b(?:asma|asthma)\b", re.I), ("asthma",)),
+    (re.compile(r"\b(?:maag|gastritis|dispepsia|dyspepsia)\b", re.I), ("gastritis", "dyspepsia")),
+    (re.compile(r"\b(?:asam\s+urat|gout)\b", re.I), ("gout",)),
+)
+
+
+def _has_positive_rpd(rpd: str) -> bool:
+    clean = re.sub(r"\s+", " ", (rpd or "").strip())
+    if not clean or _DENIED_RPD_RE.match(clean):
+        return False
+    lower = clean.lower()
+    if any(lower.startswith(p) for p in ("tidak ada ", "belum pernah ", "riwayat penyakit dahulu disangkal", "disangkal")):
+        return False
+    return True
+
+
+def _clinical_context_flags(*texts: str) -> tuple[bool, bool]:
+    blob = " ".join(t for t in texts if t)
+    return bool(_PREGNANCY_CUE_RE.search(blob)), bool(_NEONATAL_CUE_RE.search(blob))
+
+
+def _secondary_context_analysis(
+    keluhan: str,
+    rps: str,
+    rpd: str,
+    summary: str,
+    obj_str: str,
+    keywords: list[str],
+) -> tuple[bool, bool, list[str]]:
+    """Deteksi apakah kondisi sekunder/komorbid/komplikasi memang ada di S/O, beserta kata kunci RPD/sekundernya."""
+    has_rpd = _has_positive_rpd(rpd)
+    sec_kws: list[str] = []
+    if has_rpd:
+        for pat, kws in _SECONDARY_CUE_RULES:
+            if pat.search(rpd):
+                sec_kws.extend(kws)
+        if not sec_kws:
+            sec_kws.extend(w for w in re.findall(r"[a-zA-Z]{4,}", rpd.lower())[:6])
+
+    sec_blob = " ".join(x for x in (keluhan, rps, summary, obj_str) if x)
+    has_dehydration = any(k.lower() in ("dehydration", "volume depletion") for k in keywords) or bool(
+        re.search(r"\b(?:dehidrasi|dehydration|volume\s+depletion)\b", sec_blob, re.I)
+        or (re.search(r"\b(?:mulut\s+kering|haus)\b", sec_blob, re.I) and re.search(r"\b(?:lemas|lemes|bak\s+berkurang|pipis\s+berkurang)\b", sec_blob, re.I))
+    )
+    if has_dehydration:
+        sec_kws.extend(["volume depletion", "dehydration"])
+
+    # Hipertensi terukur di Objektif bila keluhan utama bukan hipertensi
+    bp_high = False
+    for m in re.finditer(r"\b(1[4-9]\d|2\d\d)\s*/\s*(\d{2,3})\b", obj_str or ""):
+        if int(m.group(1)) >= 140 or int(m.group(2)) >= 90:
+            bp_high = True
+            break
+    if bp_high and "hipertensi" not in (keluhan or "").lower():
+        sec_kws.extend(["essential hypertension", "hypertension"])
+
+    has_secondary = has_rpd or has_dehydration or bp_high
+    dedup_kws = list(dict.fromkeys(sec_kws))
+    return has_secondary, has_rpd, dedup_kws
+
+
+def _top_up_sekunder_top3(
+    final_result: dict,
+    rows: tuple[IcdRow, ...],
+    sec_kws: list[str],
+    *,
+    allow_specialist: bool,
+    allow_pregnancy: bool,
+    allow_neonatal: bool,
+) -> None:
+    """Pastikan kelompok sekunder berisi hingga 3 pilihan kode relevan bila memang ada indikasi sekunder."""
+    utama_codes = {it["code"] for it in final_result.get("utama") or []}
+    utama_roots = {c.split(".")[0] for c in utama_codes}
+
+    # Hindari kode berakar 3 karakter yang persis sama dengan diagnosis utama di sekunder
+    sekunder = [
+        it
+        for it in (final_result.get("sekunder") or [])
+        if it["code"].split(".")[0] not in utama_roots
+    ]
+    if not sekunder and not sec_kws:
+        final_result["sekunder"] = []
+        return
+
+    if len(sekunder) >= 3:
+        final_result["sekunder"] = sekunder[:3]
+        return
+
+    seen = {it["code"] for it in sekunder} | utama_codes
+    indeks = _indeks_dari_rows(rows)
+    query_terms = list(sec_kws)
+    for it in sekunder:
+        disp = it.get("display") or ""
+        query_terms.extend(w for w in re.findall(r"[a-zA-Z]{4,}", disp.lower())[:3])
+    expanded = expand_keywords(query_terms)
+    if not expanded:
+        final_result["sekunder"] = sekunder
+        return
+
+    # Prioritaskan kandidat level Poli Umum terlebih dahulu sebelum opsi spesialistik (bila RPD positif)
+    gp_pool = indeks.cari(
+        expanded,
+        top_n=12,
+        allow_specialist=False,
+        allow_pregnancy=allow_pregnancy,
+        allow_neonatal=allow_neonatal,
+    )
+    extra_pool = (
+        indeks.cari(
+            expanded,
+            top_n=12,
+            allow_specialist=True,
+            allow_pregnancy=allow_pregnancy,
+            allow_neonatal=allow_neonatal,
+        )
+        if allow_specialist
+        else []
+    )
+    alasan_fallback = (
+        "Opsi terkait kondisi penyerta/riwayat di RPD"
+        if allow_specialist
+        else "Opsi terkait komplikasi/kondisi sekunder terindikasi"
+    )
+    for code, display in [*gp_pool, *extra_pool]:
+        if len(sekunder) >= 3:
+            break
+        code_u = code.strip().upper()
+        if code_u in seen or code_u.split(".")[0] in utama_roots:
+            continue
+        if not is_gp_appropriate(
+            code_u,
+            display,
+            allow_specialist=allow_specialist,
+            allow_pregnancy=allow_pregnancy,
+            allow_neonatal=allow_neonatal,
+        ):
+            continue
+        # Jangan masukkan kode induk bila turunannya sudah ada di sekunder, atau sebaliknya
+        if any(o.startswith(code_u + ".") or code_u.startswith(o + ".") for o in seen):
+            continue
+        seen.add(code_u)
+        sekunder.append({
+            "code": code_u,
+            "display": display,
+            "deskripsi_id": display,
+            "keyakinan": 0.4,
+            "alasan": alasan_fallback,
+        })
+
+    final_result["sekunder"] = sekunder[:3]
+
+
 def icd_pick(
     subjective: dict | str,
     keywords: list[str],
@@ -542,6 +716,7 @@ def icd_pick(
 ) -> tuple[dict, dict]:
     """Pencarian maksimal 50 kandidat ICD-10 lokal + reranking top utama & sekunder oleh LLM + postprocessing."""
     keluhan, rps, disangkal, summary, obj_str, rpd = _format_clinical_context(subjective, objective)
+    allow_pregnancy, allow_neonatal = _clinical_context_flags(keluhan, rps, rpd, summary, obj_str)
 
     # Kata kunci yang digunakan: gabungan keywords + kata_kunci_icd10_en jika ada di subjective
     kw_sub = subjective.get("kata_kunci_icd10_en") if isinstance(subjective, dict) else []
@@ -559,12 +734,51 @@ def icd_pick(
         else:
             kw_used = ["fever"]
 
-    # b. Cari maksimal 50 kandidat lokal dari CSV menggunakan expand_keywords + IndeksICD10.cari(..., top_n=50)
+    has_secondary, has_positive_rpd, sec_kws = _secondary_context_analysis(
+        keluhan, rps, rpd, summary, obj_str, kw_used
+    )
+    if sec_kws:
+        kw_used = list(dict.fromkeys([*kw_used, *sec_kws]))
+
+    # b. Cari maksimal 50 kandidat lokal level Poli Umum (+ kandidat RPD khusus sekunder bila RPD positif)
     all_kws = expand_keywords(kw_used)
     indeks = _indeks_dari_rows(rows)
-    kandidat = indeks.cari(all_kws, top_n=JUMLAH_KANDIDAT) if all_kws else []
+    kandidat = (
+        indeks.cari(
+            all_kws,
+            top_n=JUMLAH_KANDIDAT,
+            allow_specialist=False,
+            allow_pregnancy=allow_pregnancy,
+            allow_neonatal=allow_neonatal,
+        )
+        if all_kws
+        else []
+    )
+    if has_positive_rpd and sec_kws:
+        sec_pool = indeks.cari(
+            expand_keywords(sec_kws),
+            top_n=10,
+            allow_specialist=True,
+            allow_pregnancy=allow_pregnancy,
+            allow_neonatal=allow_neonatal,
+        )
+        existing_c = {c for c, _ in kandidat}
+        for c, d in sec_pool:
+            if c not in existing_c and len(kandidat) < JUMLAH_KANDIDAT:
+                existing_c.add(c)
+                kandidat.append((c, d))
     if not kandidat and all_kws:
-        kandidat = [(r.code, r.display) for r in retrieve(rows, all_kws, limit=JUMLAH_KANDIDAT)]
+        kandidat = [
+            (r.code, r.display)
+            for r in retrieve(
+                rows,
+                all_kws,
+                limit=JUMLAH_KANDIDAT,
+                allow_specialist=False,
+                allow_pregnancy=allow_pregnancy,
+                allow_neonatal=allow_neonatal,
+            )
+        ]
 
     if not kandidat or not (keluhan or rps or summary or obj_str or rpd):
         empty_res = postprocess([], [], rows=rows)
@@ -572,14 +786,33 @@ def icd_pick(
             "keywords": kw_used, "candidates": len(kandidat)
         }
 
-    # c. LLM rerank memilih utama (3-4) dan sekunder (flat maks 3)
+    # c. LLM rerank memilih utama (3-4) dan sekunder (0 jika tidak ada indikasi, 3 jika terindikasi)
     prompt = bangun_prompt_icd(keluhan, rps, disangkal, kw_used, kandidat, objective=obj_str, rpd=rpd)
     try:
         rek, model2 = llm.generate(SYSTEM_ICD_RERANK, prompt, IcdRerankResult)
+        raw_sekunder = rek.sekunder if has_secondary else []
         # d. Wajib jalankan hasil LLM melewati postprocess() di icd.py sebelum dikembalikan
-        final_result = postprocess(rek.utama, rek.sekunder, rows=rows)
+        final_result = postprocess(
+            rek.utama,
+            raw_sekunder,
+            rows=rows,
+            allow_specialist_in_sekunder=has_positive_rpd,
+            allow_pregnancy=allow_pregnancy,
+            allow_neonatal=allow_neonatal,
+        )
         if not isinstance(final_result, dict):
             final_result = {"utama": final_result, "sekunder": []}
+        if has_secondary:
+            _top_up_sekunder_top3(
+                final_result,
+                rows,
+                sec_kws,
+                allow_specialist=has_positive_rpd,
+                allow_pregnancy=allow_pregnancy,
+                allow_neonatal=allow_neonatal,
+            )
+        else:
+            final_result["sekunder"] = []
         return final_result, {"keywords": kw_used, "candidates": len(kandidat), "model": model2}
     except Exception as e:
         log.error("Rerank ICD gagal (%s); fallback ke postprocess kosong.", str(e)[:200])

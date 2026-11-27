@@ -97,7 +97,7 @@ class IcdRerankResult(BaseModel):
     )
     sekunder: list[IcdPick] = Field(
         default_factory=list,
-        description="Maksimal 3 usulan kode ICD-10 untuk diagnosis sekunder (komplikasi nyata atau penyakit penyerta/riwayat kronis relevan). Kosongkan [] jika tidak ada indikasi."
+        description="Kosong [] bila tidak ada komplikasi nyata atau komorbid/riwayat kronis terpisah. Bila ada indikasi sekunder, beri tepat 3 pilihan kode ICD-10 terdekat (Top 1-3)."
     )
 
     @field_validator("sekunder", mode="before")
