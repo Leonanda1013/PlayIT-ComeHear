@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Quote } from 'lucide-react'
-import { TranscriptBubble } from '@/components/Scribe'
-import { Badge } from '@/components/ui/kit'
+import { TranscriptBubble } from '@/components/TranscriptBubble'
+import { Badge } from '@/components/ui/Badge'
 import type { ExtractionField, TranscriptSegment } from '@/lib/types'
 
 // Synthetic examples use the application's extraction/segment shapes. No API or patient data.
@@ -62,7 +62,7 @@ export function GroundedPreview({ compact = false }: { compact?: boolean }) {
           const citedFields = visibleFields.filter(field => field.meta.source_ids?.includes(id)).map(field => field.label)
           const highlighted = Boolean(active?.meta.source_ids?.includes(id))
           return <div key={id} ref={node => { if (node) segmentRefs.current.set(id, node); else segmentRefs.current.delete(id) }} className="lp-source-segment" data-segment={id} data-highlighted={highlighted}>
-            <TranscriptBubble segment={segment} patientName="Pasien Contoh" idPrefix={prefix} highlighted={highlighted} highlightQuote={highlighted ? segment.text : null} citedFields={compact ? [] : citedFields} />
+            <TranscriptBubble segment={segment} patientName="Contoh" idPrefix={prefix} highlighted={highlighted} highlightQuote={highlighted ? segment.text : null} citedFields={compact ? [] : citedFields} />
           </div>
         })}
       </div>
@@ -79,7 +79,7 @@ export function GroundedPreview({ compact = false }: { compact?: boolean }) {
         return <div key={field.key} className={`lp-grounded-field ${ambiguous ? 'has-warning' : ''}`} data-field={field.key} data-active={isActive}>
           <div className="lp-grounded-field-heading"><h4>{field.label}</h4><div className="lp-grounding-meta">
             {typeof meta.grounding === 'number' && <span className="lp-grounding-score" title="Skor contoh kecocokan bukti kutipan dengan transkrip, bukan akurasi diagnosis."><CheckCircle2 size={12} />{Math.round(meta.grounding * 100)}%</span>}
-            {sourceIds.map(id => compact ? <span key={id} className="lp-source-chip"><Quote size={11} />[{id}]</span> : <button key={id} type="button" className="lp-source-chip" aria-label={`Sorot segmen ${id} untuk ${field.label}`} aria-pressed={isActive} onClick={() => focusSource(field, id)}><Quote size={12} />[{id}]</button>)}
+            {sourceIds.map(id => compact ? <span key={id} className="lp-source-chip"><Quote size={11} />[{id}]</span> : <button key={id} type="button" className="lp-source-control" aria-label={`Sorot segmen ${id} untuk ${field.label}`} aria-pressed={isActive} onClick={() => focusSource(field, id)}><span className="lp-source-chip"><Quote size={12} />[{id}]</span></button>)}
           </div></div>
           <p className={`lp-grounded-value ${!meta.nilai ? 'is-empty' : ''}`}>{meta.nilai || 'Tidak dibahas dalam percakapan.'}</p>
           {meta.kutipan && (compact ? <div className="lp-source-quote"><Quote size={12} /><span><strong>{sourceLabel}:</strong> <em>“{meta.kutipan}”</em></span></div> : <button type="button" className="lp-source-quote" aria-label={`Lihat ${sourceLabel} untuk ${field.label}`} onClick={() => focusSource(field)}><Quote size={14} /><span><strong>{sourceLabel}:</strong> <em>“{meta.kutipan}”</em></span></button>)}

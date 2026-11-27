@@ -8,7 +8,6 @@ import { getConsultation, isManualSubjective } from '@/lib/clinical'
 import { isDoctor } from '@/lib/format'
 import type { User } from '@/lib/types'
 import { LoginPage } from '@/pages/LoginPage'
-import { LandingPage } from '@/pages/LandingPage'
 import { VisitsPage } from '@/pages/VisitsPage'
 import { SubjectivePage } from '@/pages/SubjectivePage'
 import { DraftSubjectivePage } from '@/pages/DraftSubjectivePage'
@@ -93,7 +92,7 @@ function DoctorVisitRoute({ user, onLogout, onSessionExpired }: SessionProps) {
   return <AppShell user={user} onLogout={onLogout}>{page}</AppShell>
 }
 
-function SessionApp() {
+function App() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const me = useQuery({ queryKey: ['me'], queryFn: getCurrentUser, retry: 1 })
@@ -144,13 +143,6 @@ function SessionApp() {
     <Route path="/rm/riwayat/:visitId" element={rmOnly(session && <HistoryDetailPage {...session} base="/rm/riwayat" />)} />
     <Route path="/rm/satusehat" element={rmOnly(session && <SatusehatPage {...session} />)} />
     <Route path="*" element={<Navigate to={homeOf(user)} replace />} />
-  </Routes>
-}
-
-function App() {
-  return <Routes>
-    <Route path="/" element={<LandingPage />} />
-    <Route path="*" element={<SessionApp />} />
   </Routes>
 }
 

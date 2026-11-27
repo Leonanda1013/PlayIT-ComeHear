@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Inter Variable', Arial, sans-serif;
+  --font-inter: 'Inter Variable', Arial, sans-serif;
+  --color-ch-bg: #e8f1f4;
+  --color-ch-surface: #f6fafb;
+  --color-ch-panel: #fbfdfe;
+  --color-ch-field: #f8fbfc;
+  --color-ch-line: #d5e4e9;
+  --color-ch-ink: #081d2d;
+  --color-ch-muted: #526578;
+  --color-ch-brand: #14a3b8;
+  --color-ch-teal: #0b6e7d;
+  --color-ch-ok: #136f4e;
+  --color-ch-ok-soft: #e2f3ec;
+  --color-ch-warn: #906300;
+  --color-ch-warn-soft: #fff4dc;
+}
+
+html, body { font-family: var(--font-sans); color: #081d2d; background: #e8f1f4; }
