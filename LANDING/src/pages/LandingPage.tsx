@@ -80,7 +80,6 @@ export function LandingPage() {
       <section className="lp-hero" id="beranda" aria-labelledby="hero-title">
         <div className="lp-container lp-hero-grid">
           <div className="lp-hero-copy">
-            <div className="lp-eyebrow"><span className="lp-live-dot" /> DIBUAT UNTUK RUANG KONSULTASI</div>
             <h1 id="hero-title">Dengarkan<br />ceritanya.<span>Kami bantu<br />catatkan.</span></h1>
             <p className="lp-hero-description">Tatap pasien Anda. ComeHear membantu menata percakapan menjadi draf Subjektif, agar Anda punya ruang untuk mendengar lebih baik.</p>
             <div className="lp-actions"><a href="#demo" className="lp-button lp-button-primary"><Play size={16} />Coba demo interaktif<ArrowRight size={17} /></a><a href={contactHref} className="hero-contact">Bicara dengan tim <ArrowRight size={16} /></a></div>
