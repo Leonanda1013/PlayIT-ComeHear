@@ -179,14 +179,16 @@ SYSTEM_ICD_KEYWORDS = (
 SYSTEM_ICD_RERANK = (
     SYSTEM
     + "\nPilih kode ICD-10 level POLI UMUM (FKTP) sebagai USULAN untuk dokter HANYA dari daftar KANDIDAT (salin kode persis):\n"
-    "1. `utama`: 3-4 kode spesifik (pakai subtipe desimal bila tersedia, BUKAN kode induk bersama turunannya), urut keyakinan tertinggi.\n"
-    "   WAJIB diagnosis yang dapat ditegakkan dokter umum dari anamnesis & pemeriksaan klinik dasar. DILARANG memilih diagnosis yang butuh konfirmasi dokter spesialis, kultur mikrobiologi/virologi spesifik, biopsi/PA, endoskopi, CT/MRI, atau ICU (keganasan, gagal napas, bronkiektasis, varises gaster, kongenital, gastritis atrofik, TB terkonfirmasi, patogen kultur spesifik).\n"
-    "2. `sekunder`: KOSONGKAN [] bila Subjektif & Objektif TIDAK memiliki komplikasi nyata maupun komorbid/riwayat kronis terpisah. "
-    "Bila MEMANG ADA indikasi kondisi sekunder/komorbid/komplikasi, berikan TEPAT 3 pilihan kode ICD-10 terdekat (Top 1-3) urut keyakinan tertinggi (`alasan` wajib menyebut komorbid/RPD atau komplikasinya). Diagnosis kronis spesialistik hanya boleh masuk `sekunder` jika eksplisit disebut sebagai diagnosis lama di RPD.\n"
+    "1. `utama`: 3-4 kode diagnosis utama terbaik, urut keyakinan tertinggi.\n"
+    "   - Urutan pertama `utama` WAJIB kondisi yang menjadi alasan utama kunjungan ini (lihat KELUHAN UTAMA). Penyakit kronis terkontrol masuk `sekunder`, KECUALI bila kunjungan bertujuan kontrol/ambil obat rutin/cek gula/cek tensi atau keluhan utama menyebut penyakit kronis tersebut — maka penyakit kronis itu menjadi urutan pertama `utama`.\n"
+    "   - Spesifisitas kode WAJIB sesuai kekuatan bukti: bila hanya tersedia anamnesis (OBJEKTIF kosong atau belum ada pemeriksaan fisik/lab/penunjang), prioritaskan kode sindrom klinis atau kode `.9`/unspecified (mis. N39.0, J45.9, D64.9, A09.9, M54.5, K30) di urutan 1, kecuali anamnesis sendiri membuktikan subtipe secara pasti. Kode subtipe yang lebih spesifik boleh ditaruh di urutan 2–3.\n"
+    "   - WAJIB diagnosis yang dapat ditegakkan dokter umum dari anamnesis & pemeriksaan klinik dasar. DILARANG memilih diagnosis yang butuh konfirmasi dokter spesialis, kultur mikrobiologi/virologi spesifik, biopsi/PA, endoskopi, CT/MRI, atau ICU (keganasan, gagal napas, bronkiektasis, varises gaster, kongenital, gastritis atrofik, TB terkonfirmasi, patogen kultur spesifik).\n"
+    "2. `sekunder`: KOSONGKAN [] bila Subjektif & Objektif TIDAK memiliki komplikasi nyata maupun komorbid/riwayat kronis terpisah.\n"
+    "   Bila MEMANG ADA indikasi kondisi sekunder/komorbid/komplikasi, berikan TEPAT 3 pilihan kode ICD-10 terdekat (Top 1-3) urut keyakinan tertinggi (`alasan` wajib menyebut komorbid/RPD atau komplikasinya). Diagnosis kronis spesialistik hanya boleh masuk `sekunder` jika eksplisit disebut sebagai diagnosis lama di RPD.\n"
     "Aturan wajib:\n"
     "- DILARANG memilih kode gejala (awalan R) di `sekunder` bila sudah tercakup diagnosis utama (mis. R10.4/R53/R11/R50 pada gastroenteritis).\n"
     "- DILARANG memilih R34 tanpa bukti pengukuran volume urin terdokumentasi.\n"
-    "- Jangan memilih kode induk sekaligus turunannya, jangan pilih kode eksternal (V/W/X/Y), dan jangan pilih gejala yang disangkal.\n"
+    "- Jangan memilih kode induk sekaligus turunannya, jangan pilih kode eksternal (V/W/X/Y), dan jangan pilih gejala atau riwayat yang disangkal.\n"
     "- `keyakinan` (0.0-1.0): >=0.7 jika bukti kuat, 0.3-0.5 jika dugaan awal/riwayat. `alasan` wajib menyebut bukti konkret S/O."
 )
 
@@ -290,6 +292,12 @@ def bangun_prompt_s(segmen_aman: list[dict], butuh_pembicara: bool) -> str:
     return f"{prefix}TRANSKRIP:\n{render_transcript(segmen_aman)}"
 
 
+_CONTROL_VISIT_RE = re.compile(
+    r"\b(?:kontrol|ambil\s+obat|obat\s+habis|putus\s+obat|cek\s+(?:gula|tensi|tekanan\s+darah|kolesterol|asam\s+urat))\b",
+    re.IGNORECASE,
+)
+
+
 def bangun_prompt_icd(
     keluhan: str,
     rps: str,
@@ -301,8 +309,14 @@ def bangun_prompt_icd(
 ) -> str:
     obj_section = f"OBJEKTIF / FISIK:\n{objective}\n" if objective else ""
     rpd_section = f"RPD: {rpd or '-'}\n" if rpd is not None else ""
+    fokus_section = (
+        "FOKUS KUNJUNGAN: Kunjungan kontrol/pengobatan rutin penyakit kronis — prioritaskan penyakit kronis yang dikontrol pada urutan pertama `utama`.\n"
+        if _CONTROL_VISIT_RE.search(keluhan or "")
+        else ""
+    )
     return (
         f"KELUHAN UTAMA: {keluhan or '-'}\n"
+        f"{fokus_section}"
         f"RPS: {rps or '-'}\n"
         f"{rpd_section}"
         f"DISANGKAL: {', '.join(disangkal) or '-'}\n"
@@ -549,26 +563,45 @@ _DENIED_RPD_RE = re.compile(
     r"^(?:-|none|nihil|tidak(?:\s+ada|\s+pernah)?|belum\s+pernah|nggak\s+ada|ga\s+ada|disangkal|tidak_ditemukan)\.?$",
     re.IGNORECASE,
 )
+_CLAUSE_SPLIT_RE = re.compile(
+    r"[.;\n]+|,?\s+\b(?:namun|tetapi|tapi|sedangkan)\b\s*|"
+    r",\s+(?=(?:tidak\s+(?:ada|pernah|punya|memiliki|diketahui|ditemukan)|belum\s+(?:ada|pernah)|disangkal|menyangkal|riwayat\s+|[A-Za-z0-9\s]+\(\s*[+-]\s*\)))",
+    re.IGNORECASE,
+)
+_NEGATED_CLAUSE_RE = re.compile(
+    r"\b(?:tidak\s+(?:ada|pernah|punya|memiliki|diketahui|ditemukan)|belum\s+(?:ada|pernah)|"
+    r"disangkal|menyangkal|menolak|negatif|nihil|bebas\s+dari|tidak_ditemukan|"
+    r"tanpa\s+(?:riwayat|ada|penyakit))\b|\(\s*-\s*\)",
+    re.IGNORECASE,
+)
 _PREGNANCY_CUE_RE = re.compile(r"\b(?:hamil|kehamilan|trimester|nifas|melahirkan|postpartum|antenatal|puerperium|gravida)\b", re.I)
 _NEONATAL_CUE_RE = re.compile(r"\b(?:neonatus|newborn|bayi\s+baru\s+lahir|perinatal)\b", re.I)
-_SECONDARY_CUE_RULES: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
-    (re.compile(r"\b(?:dehidrasi|dehydration|volume\s+depletion|mulut\s+kering|haus\s+sekali)\b", re.I), ("volume depletion", "dehydration")),
-    (re.compile(r"\b(?:hipertensi|darah\s+tinggi|hypertension)\b", re.I), ("essential hypertension", "hypertension")),
-    (re.compile(r"\b(?:diabetes|kencing\s+manis|gula\s+darah)\b", re.I), ("non-insulin-dependent diabetes mellitus", "diabetes mellitus")),
-    (re.compile(r"\b(?:asma|asthma)\b", re.I), ("asthma",)),
-    (re.compile(r"\b(?:maag|gastritis|dispepsia|dyspepsia)\b", re.I), ("gastritis", "dyspepsia")),
-    (re.compile(r"\b(?:asam\s+urat|gout)\b", re.I), ("gout",)),
+_SECONDARY_CUE_RULES: tuple[tuple[re.Pattern, re.Pattern | None, tuple[str, ...]], ...] = (
+    (re.compile(r"\b(?:dehidrasi|dehydration|volume\s+depletion|mulut\s+kering|haus\s+sekali)\b", re.I), None, ("volume depletion", "dehydration")),
+    (re.compile(r"\b(?:hipertensi|darah\s+tinggi|hypertension)\b", re.I), re.compile(r"\b(?:hipertensi|darah\s+tinggi|tensi|hypertension)\b", re.I), ("essential hypertension", "hypertension")),
+    (re.compile(r"\b(?:diabetes|kencing\s+manis|gula\s+darah)\b", re.I), re.compile(r"\b(?:diabetes|kencing\s+manis|gula\s+darah)\b", re.I), ("non-insulin-dependent diabetes mellitus", "diabetes mellitus")),
+    (re.compile(r"\b(?:asma|asthma)\b", re.I), re.compile(r"\b(?:asma|asthma|mengi|ngik)\b", re.I), ("asthma",)),
+    (re.compile(r"\b(?:maag|gastritis|dispepsia|dyspepsia)\b", re.I), re.compile(r"\b(?:maag|gastritis|dispepsia|dyspepsia|ulu\s+hati|lambung)\b", re.I), ("gastritis", "dyspepsia")),
+    (re.compile(r"\b(?:asam\s+urat|gout)\b", re.I), re.compile(r"\b(?:asam\s+urat|gout)\b", re.I), ("gout",)),
 )
 
 
-def _has_positive_rpd(rpd: str) -> bool:
+def _positive_rpd_clauses(rpd: str) -> list[str]:
+    """Ekstrak klausa RPD yang bersifat positif (membuang klausa penyangkalan seperti 'darah tinggi disangkal')."""
     clean = re.sub(r"\s+", " ", (rpd or "").strip())
     if not clean or _DENIED_RPD_RE.match(clean):
-        return False
-    lower = clean.lower()
-    if any(lower.startswith(p) for p in ("tidak ada ", "belum pernah ", "riwayat penyakit dahulu disangkal", "disangkal")):
-        return False
-    return True
+        return []
+    pos: list[str] = []
+    for clause in _CLAUSE_SPLIT_RE.split(clean):
+        c = clause.strip(" ,.;:")
+        if not c or _DENIED_RPD_RE.match(c) or _NEGATED_CLAUSE_RE.search(c):
+            continue
+        pos.append(c)
+    return pos
+
+
+def _has_positive_rpd(rpd: str) -> bool:
+    return bool(_positive_rpd_clauses(rpd))
 
 
 def _clinical_context_flags(*texts: str) -> tuple[bool, bool]:
@@ -585,14 +618,14 @@ def _secondary_context_analysis(
     keywords: list[str],
 ) -> tuple[bool, bool, list[str]]:
     """Deteksi apakah kondisi sekunder/komorbid/komplikasi memang ada di S/O, beserta kata kunci RPD/sekundernya."""
-    has_rpd = _has_positive_rpd(rpd)
+    pos_clauses = _positive_rpd_clauses(rpd)
+    has_rpd = bool(pos_clauses)
+    pos_rpd_text = "; ".join(pos_clauses)
     sec_kws: list[str] = []
     if has_rpd:
-        for pat, kws in _SECONDARY_CUE_RULES:
-            if pat.search(rpd):
+        for pat, primary_overlap, kws in _SECONDARY_CUE_RULES:
+            if pat.search(pos_rpd_text) and not (primary_overlap and primary_overlap.search(keluhan or "")):
                 sec_kws.extend(kws)
-        if not sec_kws:
-            sec_kws.extend(w for w in re.findall(r"[a-zA-Z]{4,}", rpd.lower())[:6])
 
     sec_blob = " ".join(x for x in (keluhan, rps, summary, obj_str) if x)
     has_dehydration = any(k.lower() in ("dehydration", "volume depletion") for k in keywords) or bool(

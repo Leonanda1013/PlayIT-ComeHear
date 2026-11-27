@@ -93,7 +93,7 @@ class IcdPicks(BaseModel):
 class IcdRerankResult(BaseModel):
     utama: list[IcdPick] = Field(
         default_factory=list,
-        description="3-4 usulan kode ICD-10 spesifik (kode turunan) untuk diagnosis utama terbaik dari daftar kandidat, diurutkan dari keyakinan tertinggi."
+        description="3-4 usulan kode ICD-10 untuk diagnosis utama terbaik dari daftar kandidat, urut keyakinan tertinggi (sesuaikan spesifisitas dengan bukti klinis; hindari subtipe spesifik bila hanya ada anamnesis tanpa penunjang)."
     )
     sekunder: list[IcdPick] = Field(
         default_factory=list,
