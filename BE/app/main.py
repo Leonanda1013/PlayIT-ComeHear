@@ -1087,13 +1087,13 @@ def kfa_search(q: str = "", user: User = Depends(require(*ROLE_MATRIX["clinical"
     hits = []
     for code, meta in DRUGS.items():
         display = meta.get("display", "")
-        ing = meta.get("ingredient_display", "")
+        ing = " ".join(i["display"] for i in meta.get("ingredients", []))
         if not ql or ql in code.lower() or ql in display.lower() or ql in ing.lower():
             hits.append({
                 "code": code,
                 "display": display,
                 "form": meta.get("form_display", ""),
-                "dose_unit": meta.get("dose_unit", "tablet"),
+                "dose_unit": {"TAB": "tablet", "CHEWTAB": "tablet"}.get(meta.get("dose_unit", ""), meta.get("dose_unit", "tablet")),
                 "proven": meta.get("proven", True),
             })
     return hits

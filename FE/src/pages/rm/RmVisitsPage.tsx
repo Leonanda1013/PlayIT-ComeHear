@@ -112,7 +112,8 @@ export function RmVisitsPage({ user, onLogout }: SessionProps) {
         const sB = rmStatusMeta[b.rm_status]?.label || b.rm_status
         cmp = sA.localeCompare(sB, 'id', { sensitivity: 'base' })
       }
-      return sortOrder === 'asc' ? cmp : -cmp
+      // Nilai sama (mis. tanggal yang sama): urut sesuai waktu didaftarkan, yang terbaru paling bawah.
+      return (sortOrder === 'asc' ? cmp : -cmp) || a.id - b.id
     })
   }, [visits.data, poli, sortField, sortOrder])
 

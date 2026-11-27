@@ -6,11 +6,12 @@ Condition (ICD-10), Observation tanda vital, ClinicalImpression, MedicationReque
 dengan Medication di-contained. Rujukan antar-resource memakai urn:uuid dan satu arah
 (ClinicalImpression -> Condition; Condition tidak menunjuk balik) agar tidak melingkar.
 """
+import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from app.fhir.codes import DRUGS, ICD10, KFA, LOINC, ROUTES, SNOMED, UCUM, VITALS
+from app.fhir.codes import DRUGS, ICD10, KFA, LOINC, ROUTES, SNOMED, UCUM, VITALS, match_allergen
 
 
 def fhir_time(value: str | datetime) -> str:
@@ -93,6 +94,29 @@ def build_bundle(snap: dict, org_id: str, new_uuid: Callable[[], str] | None = N
             "valueQuantity": {"value": float(value), "unit": unit, "system": UCUM, "code": unit},
         }))
 
+    # --- AllergyIntolerance: hanya alergen yang dilaporkan ADA oleh AI, juga tertulis di riwayat alergi
+    # yang disetujui dokter, dan dikenal tabel SNOMED. Sisanya tetap sebagai teks catatan.
+    for n, allergy in enumerate(allergies_to_send(snap), start=1):
+        entries.append(_entry(_urn(new_uuid), {
+            "resourceType": "AllergyIntolerance",
+            "identifier": [{"system": f"http://sys-ids.kemkes.go.id/allergy/{org_id}", "use": "official",
+                            "value": f"{v['code']}-ALG-{n}"}],
+            "clinicalStatus": {"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
+                "code": "active", "display": "Active"}]},
+            "verificationStatus": {"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification",
+                "code": allergy["verification"], "display": allergy["verification"].capitalize()}]},
+            "category": [allergy["category"]],
+            "code": {"coding": [{"system": SNOMED, "code": allergy["code"], "display": allergy["display"]}],
+                     "text": allergy["text"]},
+            "patient": patient_ref,
+            "encounter": enc_ref,
+            "recordedDate": fhir_time(ended),
+            "recorder": {"reference": prac_ref},
+            **({"note": [{"text": f"Reaksi: {allergy['reaction']}"}]} if allergy["reaction"] else {}),
+        }))
+
     # --- ClinicalImpression: anamnesis (S) + rasional klinis dokter ---
     summary = (snap.get("assessment") or "").strip()
     impression = {
@@ -161,7 +185,6 @@ def build_bundle(snap: dict, org_id: str, new_uuid: Callable[[], str] | None = N
 def _medication_request(rx: dict, n: int, visit_code: str, org_id: str, patient_ref: dict,
                         enc_ref: dict, prac_ref: str, reason_url: str | None, authored: str) -> dict:
     drug = DRUGS[rx["kfa_code"]]
-    st = drug["strength"]
     route_code, route_display = ROUTES[rx.get("route", "oral")]
     rx_no = f"{visit_code}-RX"
     authored_dt = datetime.fromisoformat(authored)
@@ -179,7 +202,7 @@ def _medication_request(rx: dict, n: int, visit_code: str, org_id: str, patient_
             "type": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/dose-rate-type",
                                  "code": "ordered", "display": "Ordered"}]},
             "doseQuantity": {"value": float(rx["dose_value"]), "unit": drug["dose_unit"],
-                             "system": UCUM, "code": drug["dose_unit"]}}],
+                             "system": drug.get("dose_system", UCUM), "code": drug["dose_unit"]}}],
     }
     if rx.get("as_needed_text"):
         dosage["asNeededCodeableConcept"] = {
@@ -210,12 +233,14 @@ def _medication_request(rx: dict, n: int, visit_code: str, org_id: str, patient_
             "manufacturer": {"reference": f"Organization/{org_id}"},
             "form": {"coding": [{"system": "http://terminology.kemkes.go.id/CodeSystem/medication-form",
                                  "code": drug["form_code"], "display": drug["form_display"]}]},
+            # Obat kombinasi (mis. Antasida) mengirim setiap zat aktif sesuai KFA.
             "ingredient": [{
-                "itemCodeableConcept": {"coding": [{"system": KFA, "code": drug["ingredient_kfa"],
-                                                    "display": drug["ingredient_display"]}]},
+                "itemCodeableConcept": {"coding": [{"system": KFA, "code": ing["kfa"], "display": ing["display"]}]},
                 "isActive": True,
-                "strength": {"numerator": {"value": st["num"], "system": UCUM, "code": st["num_unit"]},
-                             "denominator": {"value": st["den"], "system": UCUM, "code": st["den_unit"]}}}],
+                "strength": {"numerator": {"value": ing["num"], "system": UCUM, "code": ing["num_unit"]},
+                             "denominator": {"value": ing["den"], "system": ing.get("den_system", UCUM),
+                                             "code": ing["den_unit"]}}}
+                for ing in drug["ingredients"]],
         }],
         "medicationReference": {"reference": "#med1", "display": drug["display"]},
         "subject": patient_ref,
@@ -238,3 +263,43 @@ def _medication_request(rx: dict, n: int, visit_code: str, org_id: str, patient_
     if reason_url:
         resource["reasonReference"] = [{"reference": reason_url}]
     return resource
+
+
+NEGASI_ALERGI = re.compile(r"\b(tidak|tak|nggak|ngga|gak|enggak|disangkal|negatif|bukan|tanpa|belum pernah)\b")
+RAGU_ALERGI = re.compile(r"\b(diduga|mungkin|curiga|kayaknya|sepertinya|kemungkinan)\b|\?")
+
+
+def allergies_to_send(snap: dict) -> list[dict]:
+    """Alergen dari teks Riwayat alergi yang disetujui dokter (sumber utama, juga untuk pencatatan manual).
+
+    Teks dipecah per kalimat/koma; bagian yang mengandung penyangkalan dilewati. Daftar alergi AI
+    hanya melengkapi reaksi dan kepastian, tidak pernah menambah alergen yang tidak ditulis dokter.
+    """
+    doctor_text = str((snap.get("subjective") or {}).get("riwayat_alergi") or "")
+    ai = {}
+    for a in snap.get("allergies") or []:
+        hit = match_allergen(str(a.get("zat") or ""))
+        if hit:
+            ai.setdefault(hit["code"], a)
+    out, seen = [], set()
+    for part in re.split(r"[,;.\n/&]|\bdan\b|\batau\b", doctor_text, flags=re.IGNORECASE):
+        seg = part.strip()
+        low = seg.lower()
+        if not seg or NEGASI_ALERGI.search(low):
+            continue
+        hit = match_allergen(low)
+        # Alergen di luar tabel tidak dikirim: sandbox mewajibkan category dan code.coding
+        # (teks saja ditolak, RuleNumber 10075/10078). Teksnya tetap ada di anamnesis.
+        if hit is None or hit["code"] in seen:
+            continue
+        seen.add(hit["code"])
+        src = ai.get(hit["code"]) or {}
+        if src.get("kepastian") in ("confirmed", "unconfirmed") and not RAGU_ALERGI.search(low):
+            verification = src["kepastian"]
+        else:
+            verification = "unconfirmed" if RAGU_ALERGI.search(low) else "confirmed"
+        paren = re.search(r"\(([^)]+)\)", seg)
+        reaction = str(src.get("reaksi") or (paren.group(1) if paren else "")).strip()
+        out.append({**hit, "text": hit.get("name") or re.sub(r"\s*\([^)]*\)", "", seg).strip(),
+                    "verification": verification, "reaction": reaction})
+    return out
