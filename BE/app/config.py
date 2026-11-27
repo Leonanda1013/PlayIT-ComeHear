@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # ASR_FINAL_MODEL mentranskrip ulang seluruh audio setelah "Selesai" dan hasilnya yang dikirim ke LLM.
     # Kosong = sama dengan ASR_MODEL (tanpa transkripsi ulang).
     asr_final_model: str = ""
+    asr_preprocess: bool = True
+    asr_highpass_hz: int = Field(default=80, ge=0, le=300)
 
     @field_validator("asr_model", "asr_final_model", mode="before")
     @classmethod

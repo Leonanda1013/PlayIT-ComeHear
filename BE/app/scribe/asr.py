@@ -118,27 +118,123 @@ def _split_sentences(text: str, start: float, end: float) -> list[tuple[float, f
     return out
 
 
-def decode_audio(path: str, sr: int = 16000):
-    """Dekode ke float32 mono 16 kHz. Ditulis sendiri karena decode_audio bawaan faster-whisper
-    1.2 memanggil av.open(metadata_errors=...) yang sudah dihapus di PyAV 15+."""
+def _resample_and_filter(container, stream, sr: int, highpass_hz: int):
+    import av
+    resampler = av.AudioResampler(format="flt", layout="mono", rate=sr)
+    abuf = sink = graph = None
+    if highpass_hz > 0:
+        graph = av.filter.Graph()
+        abuf = graph.add_abuffer(format="flt", sample_rate=sr, layout="mono")
+        hp = graph.add("highpass", f"f={highpass_hz}")
+        sink = graph.add("abuffersink")
+        abuf.link_to(hp)
+        hp.link_to(sink)
+        graph.configure()
+
+    chunks = []
+
+    def _emit(frame):
+        if graph is None:
+            chunks.append(frame.to_ndarray().reshape(-1))
+            return
+        abuf.push(frame)
+        while True:
+            try:
+                chunks.append(sink.pull().to_ndarray().reshape(-1))
+            except av.error.FFmpegError:
+                break
+
+    try:
+        for frame in container.decode(stream):
+            for f in resampler.resample(frame):
+                _emit(f)
+    except av.error.FFmpegError:
+        # Saat rekaman masih berjalan, potongan terakhir bisa belum lengkap: pakai yang sudah terbaca.
+        pass
+    for f in resampler.resample(None):
+        _emit(f)
+    if graph is not None:
+        try:
+            abuf.push(None)
+            while True:
+                chunks.append(sink.pull().to_ndarray().reshape(-1))
+        except av.error.FFmpegError:
+            pass
+    return chunks
+
+
+def preprocess_audio(
+    audio,
+    sr: int = 16000,
+    *,
+    target_rms: float = 0.085,
+    noise_floor_rms: float = 0.005,
+    max_gain: float = 4.5,
+    min_gain: float = 0.5,
+):
+    """Normalisasi kenyaringan bertarget ucapan (speech-gated) + soft peak limiter.
+
+    Suara pasien yang pelan diangkat agar terbaca jelas oleh Silero VAD & Whisper,
+    sementara bagian hening di bawah noise_floor_rms tidak diperkuat agar tidak memicu halusinasi.
+    """
+    import numpy as np
+
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.size == 0 or float(np.max(np.abs(arr))) == 0.0:
+        return arr
+
+    # Buang DC offset tanpa menggeser sinyal nol
+    arr = arr - np.float32(np.mean(arr))
+
+    frame_len = max(1, int(0.25 * sr))
+    n_frames = max(1, (arr.size + frame_len - 1) // frame_len)
+    pad = n_frames * frame_len - arr.size
+    padded = np.pad(arr, (0, pad)) if pad else arr
+    frames = padded.reshape(n_frames, frame_len)
+    rms = np.sqrt(np.mean(frames * frames, axis=1) + 1e-12)
+
+    # Hanya segmen di atas noise_floor_rms yang dinaikkan; puncak sangat keras tetap diturunkan.
+    desired = np.where(
+        rms >= noise_floor_rms,
+        np.clip(target_rms / rms, min_gain, max_gain),
+        np.minimum(1.0, target_rms / np.maximum(rms, 1e-6)),
+    ).astype(np.float32)
+
+    # Haluskan transisi gain antarblok 250 ms supaya tidak ada bunyi klik
+    if n_frames > 1:
+        kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+        desired = np.convolve(np.pad(desired, 1, mode="edge"), kernel, mode="valid")
+
+    centers = (np.arange(n_frames, dtype=np.float64) + 0.5) * frame_len
+    gains = np.interp(np.arange(arr.size, dtype=np.float64), centers, desired).astype(np.float32)
+    leveled = arr * gains
+
+    # Soft limiter di atas ambang 0.85 untuk mencegah clipping keras pada puncak mendadak
+    threshold = np.float32(0.85)
+    abs_x = np.abs(leveled)
+    over = abs_x > threshold
+    if np.any(over):
+        headroom = np.float32(0.13)
+        compressed = threshold + headroom * np.tanh((abs_x[over] - threshold) / headroom)
+        leveled[over] = np.sign(leveled[over]) * compressed
+
+    return np.clip(leveled, -0.99, 0.99).astype(np.float32)
+
+
+def decode_audio(path: str, sr: int = 16000, *, highpass_hz: int = 80):
+    """Dekode ke float32 mono 16 kHz dengan filter high-pass 80 Hz. Ditulis sendiri karena
+    decode_audio bawaan faster-whisper 1.2 memanggil av.open(metadata_errors=...) yang dihapus di PyAV 15+."""
     import av
     import numpy as np
-    resampler = av.AudioResampler(format="s16", layout="mono", rate=sr)
-    chunks = []
     with av.open(path, mode="r") as container:
         stream = container.streams.audio[0]
-        try:
-            for frame in container.decode(stream):
-                for f in resampler.resample(frame):
-                    chunks.append(f.to_ndarray().reshape(-1))
-        except av.error.FFmpegError:
-            # Saat rekaman masih berjalan, potongan terakhir bisa belum lengkap: pakai yang sudah terbaca.
-            pass
-        for f in resampler.resample(None):
-            chunks.append(f.to_ndarray().reshape(-1))
+        chunks = _resample_and_filter(container, stream, sr, highpass_hz)
     if not chunks:
         return np.zeros(0, dtype=np.float32)
-    return np.concatenate(chunks).astype(np.float32) / 32768.0
+    out = np.concatenate(chunks)
+    if out.dtype != np.float32:
+        out = out.astype(np.float32)
+    return out
 
 
 def _run(audio, s: Settings, offset: float = 0.0, model: str | None = None, context: str = "") -> list[dict]:
@@ -163,10 +259,17 @@ def _to_sentences(raw: list[dict], start_index: int = 0) -> list[dict]:
     return out
 
 
+def _decode_for_settings(path: str, s: Settings):
+    do_pre = getattr(s, "asr_preprocess", True)
+    hp_hz = getattr(s, "asr_highpass_hz", 80) if do_pre else 0
+    audio = decode_audio(path, highpass_hz=hp_hz) if hp_hz != 80 else decode_audio(path)
+    return preprocess_audio(audio) if do_pre else audio
+
+
 def transcribe(path: str, s: Settings, model: str | None = None) -> tuple[list[dict], dict]:
     """Transkripsi utuh sekali jalan (dipakai untuk unggahan audio dan transkrip akhir)."""
     name = model or s.asr_model
-    audio = decode_audio(path)
+    audio = _decode_for_settings(path, s)
     return _to_sentences(_run(audio, s, model=name)), {"asr_model": name, "duration_s": round(len(audio) / 16000, 1)}
 
 
@@ -228,7 +331,7 @@ def transcribe_incremental(path: str, s: Settings, segments: list[dict], offset:
     baru (di jeda bicara) setelah `offset`; saat `final`, sisa audio diproses sampai habis.
     Mengembalikan (segmen terkunci, offset baru, durasi audio sejauh ini).
     """
-    audio = decode_audio(path)
+    audio = _decode_for_settings(path, s)
     segs, new_offset = incremental_step(audio, s, segments, offset, final)
     return segs, new_offset, len(audio) / 16000
 

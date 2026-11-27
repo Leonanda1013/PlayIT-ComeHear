@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, MicOff, Pause, Play, RefreshCw, Square, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
-import { TranscriptBubble, Waveform } from '@/components/Scribe'
+import { TranscriptBubble, Waveform, type MicLevelHint } from '@/components/Scribe'
 import { Dialog, Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
 import { closeAudioSession, finishAudioSession, getScribe, resumeAudioSession, startAudioSession, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
@@ -28,6 +28,10 @@ export function SubjectivePage({ data }: { data: Consultation }) {
   const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [noiseSuppression, setNoiseSuppression] = useState<boolean>(() => {
+    try { return localStorage.getItem('ch_asr_noise_suppression') === '1' } catch { return false }
+  })
+  const [micLevelHint, setMicLevelHint] = useState<MicLevelHint>(null)
   const [micMenuOpen, setMicMenuOpen] = useState(false)
   const [micButtonHovered, setMicButtonHovered] = useState(false)
   const [pendingNavigationUrl, setPendingNavigationUrl] = useState<string | null>(null)
@@ -265,13 +269,13 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       // Simpan pilihan yang dibuat melalui tombol persetujuan sebelum mengakses mikrofon.
       if (consent !== 'setuju') saveDecision('setuju', givenByName, relation)
       await saved()
-      // noiseSuppression dimatikan: filter bawaan browser untuk video call sering memotong suku kata
-      // pelan dan membuat suara "robotik", sehingga merugikan Whisper. Echo cancellation, mono 16kHz, dan AGC tetap aktif.
+      // noiseSuppression bawaan browser dimatikan di ruangan tenang agar suku kata pelan tidak terpotong;
+      // dokter bisa mengaktifkannya lewat menu mikrofon bila ruangan praktik bising.
       const audioConstraints: MediaTrackConstraints = {
         channelCount: 1,
         sampleRate: 16000,
         echoCancellation: true,
-        noiseSuppression: false,
+        noiseSuppression,
         autoGainControl: true,
         ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
       }
@@ -285,7 +289,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
               channelCount: 1,
               sampleRate: 16000,
               echoCancellation: true,
-              noiseSuppression: false,
+              noiseSuppression,
               autoGainControl: true,
             },
           })
@@ -305,7 +309,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       const type = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : undefined
       const next = new MediaRecorder(media, {
         ...(type ? { mimeType: type } : {}),
-        audioBitsPerSecond: 64000,
+        audioBitsPerSecond: 96000,
       })
       recorder.current = next
       next.ondataavailable = (event) => { if (event.data.size) sendChunk(event.data) }
@@ -466,7 +470,18 @@ export function SubjectivePage({ data }: { data: Consultation }) {
       <section className={`flex min-h-[115px] flex-wrap items-center gap-5 rounded-[16px] border px-[19px] py-4 ${recording ? 'border-[#f2a7a7] bg-[#fff8f8]' : 'border-[#dce6eb] bg-[#fbfdfe]'}`} aria-live="polite">
         <span className={`inline-flex h-[38px] items-center gap-2.5 rounded-[8px] border px-3.5 text-[14px] font-semibold ${recording ? 'border-[#f2a7a7] bg-[#fff1f1] text-[#b42727]' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}><span className={`size-2.5 rounded-full ${recording && !paused ? 'animate-pulse bg-[#e03131]' : recording ? 'bg-[#b42727]' : 'bg-[#0b6e7d]'}`} />{recording ? (paused ? 'Rekaman Dijeda' : 'Sedang Merekam') : busy ? 'Mengirim Rekaman…' : 'Mikrofon Siap'}</span>
         <p className="font-inter text-[22px] font-bold tabular-nums text-[#3f4c55]">{mmss(seconds)} <span className="font-jakarta text-[15px] font-semibold text-[#5f7284]">menit</span></p>
-        {recording && !paused && <Waveform stream={activeStream} />}
+        {recording && !paused && <Waveform stream={activeStream} onLevelHint={setMicLevelHint} />}
+        {recording && !paused && micLevelHint && (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#f0c27b] bg-[#fffaf0] px-3 py-1 text-[11px] font-medium text-[#8a4f06]"
+          >
+            <AlertTriangle className="size-3.5 shrink-0 text-[#d97706]" />
+            {micLevelHint === 'clipping'
+              ? 'Suara terlalu keras/pecah — agak jauhkan mikrofon'
+              : 'Suara pelan terdeteksi — dekatkan mikrofon'}
+          </span>
+        )}
         <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto">
           {!recording ? <>
             <div className="relative" ref={micMenuRef}>
@@ -513,6 +528,21 @@ export function SubjectivePage({ data }: { data: Consultation }) {
                       })}
                     </div>
                   )}
+                  <div className="mt-1 border-t border-[#e8eff3] px-3 pt-2 pb-1.5">
+                    <label className="flex cursor-pointer items-center justify-between gap-2 text-[12px] text-[#3d5266]">
+                      <span>Redam bising (poli ramai)</span>
+                      <input
+                        type="checkbox"
+                        checked={noiseSuppression}
+                        onChange={(e) => {
+                          const v = e.target.checked
+                          setNoiseSuppression(v)
+                          try { localStorage.setItem('ch_asr_noise_suppression', v ? '1' : '0') } catch { /* ignore */ }
+                        }}
+                        className="size-3.5 accent-ch-brand"
+                      />
+                    </label>
+                  </div>
                 </div>
               )}
             </div>
