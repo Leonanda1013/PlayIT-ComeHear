@@ -30,7 +30,11 @@ html.comehear-landing { scroll-behavior: smooth; scroll-padding-top: 100px; }
 .lp-nav-link:hover, .lp-footer a:hover { color: #0b6e7d; text-decoration: underline; }
 .lp-nav-divider { height: 22px; border-left: 1px solid #d5e4e9; }
 .lp-login-link { color: #081d2d; }
-.lp .lp-button { min-height: 48px; height: auto; border-radius: 10px; font-size: 14px; font-weight: 650; gap: 10px; padding: 12px 21px; transition: color .18s, background-color .18s, box-shadow .18s, transform .18s; }
+.lp .lp-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; white-space: nowrap; min-height: 48px; height: auto; border: 1px solid transparent; border-radius: 10px; font-size: 14px; font-weight: 650; gap: 10px; padding: 12px 21px; transition: color .18s, background-color .18s, box-shadow .18s, transform .18s; }
+.lp .lp-button:disabled { pointer-events: none; opacity: .55; }
+.lp-play-button > svg { width: 17px; height: 17px; }
+.lp-contact-address { display: inline-block; margin-top: 18px; color: #0b6e7d; font-size: 14px; overflow-wrap: anywhere; }
+.lp-contact-address:hover { text-decoration: underline; text-underline-offset: 4px; }
 .lp .lp-button-primary, .lp .lp-play-button { color: white; background: #0b6e7d; box-shadow: 0 4px 10px #0b6e7d0d; }
 .lp .lp-button-primary:hover, .lp .lp-play-button:hover { background: #006876; box-shadow: 0 6px 16px #0b6e7d25; transform: translateY(-1px); }
 .lp .lp-button-secondary { background: #fbfdfe; color: #18293a; border: 1px solid #d5e4e9; box-shadow: 0 2px 4px #081d2d03; }

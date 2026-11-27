@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Quote } from 'lucide-react'
-import { TranscriptBubble } from '@/components/Scribe'
-import { Badge } from '@/components/ui/kit'
+import { TranscriptBubble } from '@/components/TranscriptBubble'
+import { Badge } from '@/components/ui/Badge'
 import type { ExtractionField, TranscriptSegment } from '@/lib/types'
 
 // Synthetic examples use the application's extraction/segment shapes. No API or patient data.

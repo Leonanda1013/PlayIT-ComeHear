@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AudioLines, Check, CheckCheck, CircleCheck, ClipboardCheck, FileText, LoaderCircle, MessageSquareText, Pause, Play, Send, ShieldCheck } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { GroundedPreview } from './GroundedPreview'
-import { Badge } from '@/components/ui/kit'
+import { Badge } from '@/components/ui/Badge'
 
 export function Waveform({ playing = false }: { playing?: boolean }) {
   return <div className={`lp-waveform ${playing ? 'is-playing' : ''}`} aria-hidden="true">
@@ -73,10 +72,10 @@ export function ProductDemo() {
       <div className="lp-demo-context"><span><FileText size={17} /> Kunjungan DEMO-001 · Poli Umum</span><div><Badge>Data sintetis</Badge><Badge tone="info">{index === 2 ? 'Sandbox · simulasi' : 'Ilustrasi alur'}</Badge></div></div>
       <div className="lp-demo-body" tabIndex={tab === index ? 0 : -1} role="region" aria-label={`Isi preview ${tabs[index].label}`}>
       {index === 0 && <>
-        <div className="lp-demo-player"><Button type="button" className="lp-button lp-play-button" onClick={togglePlayback} disabled={playState === 'loading'} aria-pressed={playState === 'playing'}>
+        <div className="lp-demo-player"><button type="button" className="lp-button lp-play-button" onClick={togglePlayback} disabled={playState === 'loading'} aria-pressed={playState === 'playing'}>
           {playState === 'loading' ? <LoaderCircle className="lp-spinner" /> : playState === 'playing' ? <Pause /> : <Play />}
           {playState === 'loading' ? 'Menyiapkan…' : playState === 'playing' ? 'Jeda simulasi' : seconds === 42 ? 'Ulangi simulasi' : 'Putar simulasi'}
-        </Button><Waveform playing={playState === 'playing'} /><span className="lp-timer">00:{String(seconds).padStart(2, '0')} / 00:42</span></div>
+        </button><Waveform playing={playState === 'playing'} /><span className="lp-timer">00:{String(seconds).padStart(2, '0')} / 00:42</span></div>
         <p className="lp-simulation-note" role="status">{playState === 'playing' ? 'Simulasi visual berjalan. Tanpa audio atau akses mikrofon.' : 'Preview memakai contoh yang telah disiapkan. Tanpa audio atau akses mikrofon.'}</p>
         <GroundedPreview />
       </>}
