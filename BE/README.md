@@ -53,8 +53,11 @@ transkrip, draf S) → **O-A-P** (tanda vital, diagnosis ICD-10 dengan usulan AI
 Untuk mengubah nama bilik database lama menjadi `Bilik 1`, `Bilik 2`, dan seterusnya, jalankan `.venv/Scripts/python scripts/rename_rooms.py`. Perintah ini hanya memperbarui nama bilik.
 
 Untuk memperbarui data master database lama, jalankan `.venv/Scripts/python scripts/upgrade_demo.py --clinic-only`.
-Perintah ini mempertahankan ID, kata sandi akun lama, dan riwayat kunjungan. Pada mode sandbox,
-isi ID Practitioner SATUSEHAT untuk dr. Kemal dan ID Location untuk Bilik 2 sebelum validasi SOAP.
+Perintah ini mempertahankan ID, kata sandi akun lama, dan riwayat kunjungan. Pada mode sandbox, setiap
+dokter wajib punya ID Practitioner SATUSEHAT dan setiap bilik wajib punya ID Location; tanpa itu validasi
+SOAP ditolak. Database demo saat ini: dr. James `100009880728`, dr. Kemal `N10000002` (Practitioner dummy
+sandbox), Bilik 1 `b22b4bc9-abbc-4cde-80e8-089ec10bcaea`, Bilik 2 `9e7d3404-3dc4-44ad-806a-167c09599ba7`
+(Location dibuat di sandbox 27 Nov 2026).
 
 ### Supabase PostgreSQL
 
@@ -105,7 +108,8 @@ Katalog ICD-10 lengkap: taruh `icd10_satusehat.csv` (kolom `CODE,DISPLAY,VERSION
 
 Mencakup: bentuk bundle sama dengan mini-bundle yang terbukti 201 di sandbox, gerbang persetujuan dokter,
 pra-periksa (IHS, ICD, rujukan), retry timeout, rekonsiliasi duplikat 20002 saat respons hilang,
-rujukan rusak → NEEDS_ATTENTION, normalisasi WER, retrieval ICD, dan uji asap HTTP ujung ke ujung.
+rujukan rusak → NEEDS_ATTENTION, AllergyIntolerance dari teks riwayat alergi (penyangkalan, keraguan,
+pencocokan awal kata), normalisasi WER, retrieval ICD, dan uji asap HTTP ujung ke ujung.
 
 ## Struktur
 
@@ -114,7 +118,7 @@ rujukan rusak → NEEDS_ATTENTION, normalisasi WER, retrieval ICD, dan uji asap 
 | `app/main.py` | Rute web: login, kunjungan, persetujuan rekam, unggah audio, review, status kirim, dasbor |
 | `app/models.py` | Tabel: visits, consents, scribe_sessions, clinical_notes, review_edits, satusehat_submissions (outbox), resource_map, audit_log |
 | `app/scribe/` | ASR, label pembicara, ekstraksi S + grounding, ICD-10, penyedia LLM, normalisasi WER |
-| `app/fhir/` | Pembentuk Bundle (Encounter, Condition, Observation, ClinicalImpression, MedicationRequest) dan pra-periksa |
+| `app/fhir/` | Pembentuk Bundle (Encounter, Condition, Observation, AllergyIntolerance, ClinicalImpression, MedicationRequest), tabel kode (`codes.py`: LOINC, KFA, alergen SNOMED), dan pra-periksa |
 | `app/satusehat/client.py` | Klien OAuth2 + kirim bundle + cari Encounter/pasien; `MockSatusehat` untuk uji |
 | `app/sync/worker.py` | Status QUEUED → SENDING → SENT / RETRY_WAIT / NEEDS_ATTENTION / RECONCILING |
 | `notebooks/train_asr_v2.ipynb` | Latih ulang Whisper (Kaggle): WER ternormalisasi, baseline vs sesudah, data klinis sintetis |
@@ -128,10 +132,49 @@ rujukan rusak → NEEDS_ATTENTION, normalisasi WER, retrieval ICD, dan uji asap 
 | Koreksi dokter ≤ 20% per isian | Dasbor → tabel `review_edits` (nilai AI vs final saat disetujui) |
 | Waktu dokumentasi −20–30% | Dasbor → waktu proses per tahap; waktu manual diukur saat uji pengguna |
 
+## Data yang dikirim ke SATUSEHAT (sandbox)
+
+Satu kunjungan yang disetujui dokter dikirim sebagai satu Bundle `transaction` (atomik: satu resource
+ditolak berarti seluruh bundle ditolak dan tidak ada yang tersimpan). Semua resource di bawah sudah
+diterima sandbox (`201 Created`) per 27 Nov 2026, untuk dua dokter dan dua bilik.
+
+| Resource | Isi | Kode | Kapan ikut dikirim |
+|---|---|---|---|
+| Encounter | Kunjungan rawat jalan: pasien, dokter, bilik, waktu tiba/mulai/selesai, diagnosis | SNOMED 394814009 General practice | Selalu |
+| Condition | Diagnosis utama dan sekunder yang dipilih dokter | ICD-10 (WHO 2010, `data/icd10_satusehat.csv`) | Selalu (minimal 1 diagnosis primer) |
+| Observation | Tanda vital: suhu, berat, tinggi, sistolik, diastolik, nadi, laju napas, SpO2 | LOINC (8 kode) + satuan UCUM | Per tanda vital yang diisi |
+| AllergyIntolerance | Alergen dari teks Riwayat alergi yang disetujui dokter: kategori, confirmed/unconfirmed, reaksi | SNOMED CT substance (58 alergen) | Bila ada alergen yang dikenal tabel |
+| ClinicalImpression | Anamnesis (S), pemeriksaan, dan rasional klinis dokter | Kemkes TK000056 | Selalu |
+| MedicationRequest (+ Medication) | Resep non-racikan pertama dari katalog: dosis, frekuensi, durasi, jumlah | KFA (produk + zat aktif) | Bila dokter memilih obat dari katalog KFA |
+
+**Verifikasi kode**
+
+- **KFA obat** (9 produk di `codes.py`): kode produk, bentuk sediaan, zat aktif, dan kekuatan dicocokkan ke
+  API KFA sandbox (`kfa-v2/products`). Sudah dikirim dan diterima: Paracetamol 120 mg/5 mL sirup,
+  Amoxicillin 500 mg tablet, Antasida DOEN tablet kunyah (2 zat aktif), Cetirizine 10 mg tablet
+  (`proven=True`). Satuan tablet memakai HL7 `v3-orderableDrugForm` (`TAB`, `CHEWTAB`) karena sandbox
+  menolak `tablet`/`{tbl}` sebagai UCUM; sirup memakai UCUM `mL`.
+- **Alergen SNOMED** (58 di `codes.py`): tiap kode dicek ke tx.fhir.org (`$lookup` aktif dan nama resmi,
+  `$subsumes` terhadap 105590001 |Substance|), lalu ke-58 kode dikirim ke sandbox dan diterima.
+- **LOINC tanda vital**: kedelapan kode sudah dikirim dan diterima, termasuk nadi, laju napas, dan SpO2.
+
+**Dari teks alergi ke kode** (logika deterministik, bukan AI; `allergies_to_send` di `app/fhir/builder.py`):
+teks Riwayat alergi yang disetujui dokter dipecah per koma/kalimat; bagian dengan penyangkalan ("tidak",
+"disangkal", ...) dilewati; kata ragu ("diduga", "mungkin", ...) menjadi `unconfirmed`; isi dalam kurung
+menjadi reaksi; kata kunci harus di awal kata (mencegah "bayam" → "ayam") dan yang spesifik diperiksa
+lebih dulu (mis. "susu kedelai" → kedelai).
+
 ## Batasan yang diketahui
 
-- AllergyIntolerance belum masuk bundle (alergi disimpan terstruktur, tetapi butuh kode SNOMED alergen).
-- Katalog obat baru satu produk KFA yang terbukti (Paracetamol sirup 93001926).
-- LOINC nadi, laju napas, SpO2 belum pernah dikirim ke sandbox (ditandai * di layar).
-- Koreksi setelah SENT belum didukung (cara update resource di SATUSEHAT belum dieksplorasi).
+- Alergen di luar tabel 58 alergen tidak dikirim sebagai AllergyIntolerance. SATUSEHAT mewajibkan
+  `category` dan `code.coding`; AllergyIntolerance dengan teks saja ditolak sandbox (RuleNumber 10075/10078).
+  Teksnya tetap terkirim di anamnesis (ClinicalImpression).
+- Hanya obat dari katalog KFA (9 produk) yang dikirim sebagai MedicationRequest, dan hanya satu obat
+  katalog pertama per kunjungan. Racikan dan obat yang ditulis manual hanya masuk teks catatan.
+  Lima produk tablet lain di katalog memakai format yang sama dengan yang sudah diterima, tetapi belum
+  dikirim satu per satu. Oralit belum ada di katalog (kode SNOMED satuan sachet belum terverifikasi).
+- Koreksi setelah SENT belum didukung. Koreksi hanya untuk pengiriman yang gagal (NEEDS_ATTENTION/RETRY_WAIT);
+  ID resource SATUSEHAT sudah disimpan di `resource_map` sebagai dasar pembaruan (PUT) nanti.
+- Procedure (tindakan/edukasi), ServiceRequest, Specimen, dan DiagnosticReport (lab/rujukan) belum dibuat.
+- ID dr. Kemal memakai Practitioner dummy sandbox, bukan data nakes sungguhan.
 - Sebut "terintegrasi dengan sandbox SATUSEHAT", bukan produksi.

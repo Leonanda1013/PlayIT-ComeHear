@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, AudioLines, Check, ChevronDown, ClipboardCheck, FileClock, FileText, HeartHandshake, ListChecks, Mail, Menu, MessageSquareText, Network, Play, Send, ShieldCheck, Sparkles, Stethoscope, Users, X } from 'lucide-react'
+import { ArrowRight, AudioLines, Check, ChevronDown, ClipboardCheck, FileClock, FileText, HeartHandshake, ListChecks, LogIn, Mail, Menu, MessageSquareText, Network, Play, Send, ShieldCheck, Sparkles, Stethoscope, Users, X } from 'lucide-react'
 import { ProductDemo, Waveform } from '@/components/landing/ProductPreview'
 import { CareJourney, FilmSection, ListeningPreview } from '@/components/landing/Experience'
 import './landing.css'
@@ -9,6 +9,8 @@ const navigation = [['Fitur', '#fitur'], ['Cara Kerja', '#cara-kerja'], ['Untuk 
 const contactEmail = 'penguasalimit@gmail.com'
 const contactHref = `mailto:${contactEmail}`
 const logoUrl = `${import.meta.env.BASE_URL}comehear-logo.png`
+// Aplikasi klinis disajikan di domain yang sama (/login); bisa diganti lewat VITE_APP_LOGIN_URL.
+const loginHref = import.meta.env.VITE_APP_LOGIN_URL || '/login'
 const features = [
   { icon: FileText, title: 'Usulan kode ICD-10', text: 'Dukungan pencarian kode diagnosis dalam Klasifikasi Penyakit Internasional (ICD-10). Dokter meninjau usulan dan menetapkan pilihan akhir.', detail: 'Usulan AI · keputusan dokter' },
   { icon: ListChecks, title: 'Alur SOAP terstruktur', text: 'Subjektif, Objektif, Asesmen, dan Plan (SOAP) tersusun berurutan. Dokter melengkapi catatan dan memvalidasi hasilnya.', detail: 'S → O → A → P → Validasi' },
@@ -27,6 +29,10 @@ const faqs = [
 
 function ContactLink() {
   return <a href={contactHref} className="lp-button lp-button-primary"><Mail size={17} />Hubungi Kami<ArrowRight className="lp-button-arrow" size={17} /></a>
+}
+
+function LoginLink() {
+  return <a href={loginHref} className="lp-button lp-button-secondary"><LogIn size={17} />Masuk</a>
 }
 
 function DemoLink() {
@@ -71,7 +77,7 @@ export function LandingPage() {
         <button className="lp-menu-toggle" type="button" ref={menuRef} aria-label={menuOpen ? 'Tutup menu navigasi' : 'Buka menu navigasi'} aria-expanded={menuOpen} aria-controls="landing-nav" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button>
         <nav id="landing-nav" className={`lp-nav-links ${menuOpen ? 'is-open' : ''}`} aria-label="Navigasi utama" onClick={event => { if ((event.target as HTMLElement).closest('a')) setMenuOpen(false) }}>
           {navigation.map(([label, href]) => <a key={href} href={href} className="lp-nav-link">{label}</a>)}
-          <span className="lp-nav-divider" /><ContactLink />
+          <span className="lp-nav-divider" /><LoginLink /><ContactLink />
         </nav>
       </div>
     </header>
