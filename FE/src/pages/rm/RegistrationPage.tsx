@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowRight, CheckCircle2, Mic, Pencil, Search } from 'lucide-react'
+import { AlertCircle, ArrowRight, CheckCircle2, FileText, Pencil, Search } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import type { SessionProps } from '@/App'
 import { AppShell } from '@/components/AppShell'
@@ -113,9 +113,15 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
     if (!Object.keys(errors).length) setStep(2)
   }
 
+  // Isi otomatis hanya kolom yang masih kosong: pilihan dokter/bilik dari petugas tidak boleh ditimpa.
   function selectRoom(location_id: number) {
     const doctor = doctors.data?.find((d) => d.default_location_id === location_id)
-    setVisit({ ...visit, location_id, practitioner_id: doctor?.id ?? visit.practitioner_id })
+    setVisit({ ...visit, location_id, practitioner_id: visit.practitioner_id || doctor?.id || 0 })
+  }
+
+  function selectDoctor(practitioner_id: number) {
+    const doctor = doctors.data?.find((d) => d.id === practitioner_id)
+    setVisit({ ...visit, practitioner_id, location_id: visit.location_id || doctor?.default_location_id || 0 })
   }
 
   const loc = locations.data?.find((l) => l.id === visit.location_id)
@@ -274,13 +280,13 @@ export function RegistrationPage({ user, onLogout }: SessionProps) {
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div><Label htmlFor="tgl" required>Tanggal kunjungan</Label><input id="tgl" type="date" min={todayIso()} className={inputClass} value={visit.visit_date} onChange={(e) => setVisit({ ...visit, visit_date: e.target.value })} />{visit.visit_date && <p className="mt-1 text-[10px] text-ch-faint">{dateLong(visit.visit_date)}</p>}{err(visitErrors.visit_date)}</div>
           <div><Label htmlFor="bilik" required>Bilik tujuan</Label><SelectInput id="bilik" value={visit.location_id || ''} onChange={(e) => selectRoom(Number(e.target.value))}><option value="">Pilih bilik tujuan</option>{(locations.data || []).map((l) => <option key={l.id} value={l.id}>{l.poli} · {l.name}</option>)}</SelectInput>{err(visitErrors.location_id)}</div>
-          <div><Label htmlFor="dokter" required>Dokter tujuan</Label><SelectInput id="dokter" value={visit.practitioner_id || ''} onChange={(e) => setVisit({ ...visit, practitioner_id: Number(e.target.value) })}><option value="">Pilih dokter</option>{(doctors.data || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</SelectInput>{err(visitErrors.practitioner_id)}</div>
+          <div><Label htmlFor="dokter" required>Dokter tujuan</Label><SelectInput id="dokter" value={visit.practitioner_id || ''} onChange={(e) => selectDoctor(Number(e.target.value))}><option value="">Pilih dokter</option>{(doctors.data || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</SelectInput>{err(visitErrors.practitioner_id)}</div>
           <div><Label htmlFor="jenis">Jenis kunjungan</Label><SelectInput id="jenis" value={visit.visit_type} onChange={(e) => setVisit({ ...visit, visit_type: e.target.value })}><option value="Baru">Baru</option><option value="Kontrol">Kontrol</option></SelectInput></div>
           <div className="md:col-span-2"><Label htmlFor="catatan">Catatan administratif (opsional)</Label><TextArea id="catatan" rows={2} value={visit.admin_note} onChange={(e) => setVisit({ ...visit, admin_note: e.target.value })} placeholder="Contoh: pasien membawa hasil laboratorium sebelumnya." /></div>
         </div>
         <p className="mt-3 flex items-center gap-2 text-[11px] text-ch-muted"><CheckCircle2 className="size-4 text-ch-brand" /> Nomor antrean akan ditentukan sistem setelah kunjungan disimpan.</p>
       </Panel>
-      <div className="mt-4 flex items-center gap-3 rounded-[14px] border border-[#a3dfea] bg-[#e6f6f8] px-4 py-3"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><Mic className="size-4" /></span><div><p className="text-[13px] font-bold">Setelah dikonfirmasi kedatangannya, kunjungan tersedia pada antrean dokter.</p><p className="text-[11px] text-ch-muted">Dokter menggunakan sesi akunnya sendiri untuk konsultasi dan pengesahan resume.</p></div></div>
+      <div className="mt-4 flex items-center gap-3 rounded-[14px] border border-[#a3dfea] bg-[#e6f6f8] px-4 py-3"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#0b6e7d] text-white"><FileText className="size-4" /></span><div><p className="text-[13px] font-bold">Setelah dikonfirmasi kedatangannya, kunjungan tersedia pada antrean dokter.</p><p className="text-[11px] text-ch-muted">Dokter menggunakan sesi akunnya sendiri untuk konsultasi dan pengesahan resume.</p></div></div>
       <div className="mt-5 flex gap-3"><button type="button" className={btn.outline} onClick={() => setStep(0)}>Kembali</button><button type="button" className={btn.primary} onClick={toConfirm}>Lanjut ke Konfirmasi <ArrowRight className="size-4" /></button></div>
     </>}
 

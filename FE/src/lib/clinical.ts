@@ -15,11 +15,19 @@ export const vitalLabels: Record<string, string> = {
   heart_rate: 'Nadi (x/menit)', systolic: 'Sistolik (mmHg)', diastolic: 'Diastolik (mmHg)',
 }
 
+export const SCRIBE_ACTIVE_STATUSES = ['recording', 'queued', 'transcribing', 'refining', 'extracting', 'coding'] as const
+export const SCRIBE_S_PROCESSING_STATUSES = ['recording', 'queued', 'transcribing', 'refining', 'extracting'] as const
+
 export const visitPath = (id: number, segment = '') => `/api/backend/visits/${id}${segment}`
 export const getConsultation = (id: number) => apiRequest<Consultation>(visitPath(id))
 export const getScribe = (id: number) => apiRequest<ScribeState>(visitPath(id, '/scribe'))
 export const retryScribe = (id: number, sessionId: number) =>
   apiRequest(visitPath(id, `/scribe/${sessionId}/retry`), { method: 'POST' })
+export const applyAiDraft = (id: number, sessionId: number) =>
+  apiRequest<{ status: string; session_id: number; subjective: Record<string, string>; subjective_summary: string }>(
+    visitPath(id, `/scribe/${sessionId}/apply`),
+    { method: 'POST' }
+  )
 export const startAudioSession = (id: number) =>
   apiRequest<{ session_id: number; next_seq: number }>(visitPath(id, '/audio-start'), { method: 'POST' })
 export const resumeAudioSession = (id: number, sessionId: number) =>
@@ -33,10 +41,11 @@ export const triggerSuggestIcd = (id: number, data?: { subjective?: Record<strin
     body: JSON.stringify(data || {})
   })
 
-export async function finishAudioSession(id: number, sessionId: number) {
+export async function finishAudioSession(id: number, sessionId: number, idempotencyKey?: string) {
   const body = new FormData()
   body.set('session_id', String(sessionId))
-  return apiRequest<{ session_id: number; status: string }>(visitPath(id, '/audio-finish'), { method: 'POST', body })
+  if (idempotencyKey) body.set('idempotency_key', idempotencyKey)
+  return apiRequest<{ session_id: number; job_id?: string | null; status: string }>(visitPath(id, '/audio-finish'), { method: 'POST', body })
 }
 
 export async function closeAudioSession(id: number, sessionId: number) {

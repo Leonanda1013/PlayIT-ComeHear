@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { IcdPicker, type IcdValue } from '@/components/IcdPicker'
 import { KfaPicker } from '@/components/KfaPicker'
 import { btn, Check, FieldCaps, inputClass, Label, Notice, Panel, Radio, SelectInput, TextArea } from '@/components/ui/kit'
-import { saveSoap } from '@/lib/clinical'
+import { saveSoap, SCRIBE_ACTIVE_STATUSES } from '@/lib/clinical'
+import { useScribeMonitor } from '@/lib/useScribeMonitor'
 import type { Consultation, IcdSuggestion, IcdSuggestionsResult } from '@/lib/types'
 
 type Dx = { text: string; icd: IcdValue; onset: 'akut' | 'kronis' }
@@ -57,14 +58,9 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
 
   const hasSuggestions = utamaList.length > 0 || sekunderList.length > 0
 
-  // Polling pembaruan rekomendasi jika rekomendasi background baru saja dipicu dan sedang diproses
-  useEffect(() => {
-    if (hasSuggestions) return
-    const timer = setInterval(() => {
-      void queryClient.invalidateQueries({ queryKey: ['consultation', id] })
-    }, 2500)
-    return () => clearInterval(timer)
-  }, [hasSuggestions, id, queryClient])
+  const { scribe } = useScribeMonitor(data)
+  const scribeStatus = scribe.data?.status ?? data.session?.status ?? null
+  const icdLoading = !hasSuggestions && Boolean(scribeStatus && (SCRIBE_ACTIVE_STATUSES as readonly string[]).includes(scribeStatus))
 
   const set = <K extends keyof ApState>(key: K, value: ApState[K]) => setS((current) => ({ ...current, [key]: value }))
   const patchDx = (index: number, patch: Partial<Dx>) => set('dx', s.dx.map((d, i) => i === index ? { ...d, ...patch } : d))
@@ -99,6 +95,12 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
 
     <Panel className="p-5 sm:p-6">
       <h2 className="text-[20px] font-bold text-ch-ink">Asesmen</h2>
+      {icdLoading && (
+        <p role="status" className="mt-3 flex items-center gap-2 rounded-[10px] border border-[#a8dfe7] bg-[#f2fafc] px-3.5 py-2.5 text-xs text-[#0b6e7d]">
+          <LoaderCircle className="size-4 shrink-0 animate-spin text-ch-brand" />
+          Usulan kode ICD-10 sedang disusun AI di latar belakang — Anda tetap dapat memilih kode ICD-10 secara manual di bawah.
+        </p>
+      )}
       {hasSuggestions && (
         <div className="mt-3 space-y-3 rounded-[12px] border border-[#a8dfe7] bg-[#f2fafc] p-3.5 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -154,7 +156,7 @@ export function AssessmentPlanPage({ data }: { data: Consultation }) {
 
           {sekunderList.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-t border-[#d4edf2] pt-2">
-              <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Maks 3):</span>
+              <span className="font-semibold text-[#1f4e5b]">Diagnosis Sekunder / Komorbid Terindikasi (Top {sekunderList.length}):</span>
               {sekunderList.map((item, idx) => {
                 const isPrimary = s.dx[0]?.icd?.code === item.code
                 const isSelected = s.dx.slice(1).some((d) => d.icd?.code === item.code)

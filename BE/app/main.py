@@ -1,6 +1,8 @@
 """SIM ComeHear: FastAPI Headless REST API (Backend murni + worker kirim SATUSEHAT)."""
+import asyncio
 import hashlib
 import hmac
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -9,7 +11,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy import Integer, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -69,6 +71,7 @@ async def lifespan(_app: FastAPI):
     worker = OutboxWorker(SessionLocal, get_client(settings), settings)
     worker.start()
     pipeline.warm_up(settings)
+    pipeline.recover_stale_sessions(SessionLocal, settings)
     yield
     worker.stop()
 
@@ -535,9 +538,14 @@ def serialize_consultation(v: Visit, note: ClinicalNote, step: str, db: Session,
         },
         "session": {
             "id": ss.id if ss else 0,
+            "job_id": ss.job_id if ss else None,
             "status": ss.status if ss else "done",
             "transcript": ss.transcript if ss else [],
             "extraction": ss.extraction if ss else None,
+            "subjective_ready": bool(ss and ss.extraction),
+            "icd_ready": bool((ss and ss.icd_suggestions) or (note.extra and note.extra.get("icd_suggestions"))),
+            "applied_to_note": (ss.model_info or {}).get("applied_to_note", True) if ss else True,
+            "manual_conflict": bool((ss.model_info or {}).get("manual_conflict")) if ss else False,
             "icd_suggestions": (ss.icd_suggestions if (ss and ss.icd_suggestions) else (note.extra.get("icd_suggestions") if note.extra else None)),
             "timings": ss.timings if ss else None,
             "error": ss.error if ss else None,
@@ -696,11 +704,30 @@ def set_consent(visit_id: int, decision: str = Form(...), given_by_name: str = F
             "version": CONSENT_VERSION, "status": "ok"}
 
 
-def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, status: str = "queued") -> ScribeSession:
+def _start_session(
+    db: Session,
+    v: Visit,
+    user: User,
+    audio_path: str | None,
+    status: str = "queued",
+    idempotency_key: str | None = None,
+) -> tuple[ScribeSession, bool]:
     if v.consent is None or v.consent.decision != "setuju":
         raise HTTPException(403, "Belum ada persetujuan pasien: perekaman tidak diizinkan.")
     if v.note and v.note.approved_snapshot:
         raise HTTPException(409, "Catatan sudah divalidasi.")
+    if idempotency_key:
+        existing = db.scalar(
+            select(ScribeSession)
+            .where(
+                ScribeSession.visit_id == v.id,
+                ScribeSession.idempotency_key == idempotency_key,
+                ScribeSession.status.notin_(["replaced", "abandoned"]),
+            )
+            .order_by(ScribeSession.id.desc())
+        )
+        if existing is not None:
+            return existing, False
     for old in v.scribe_sessions:
         if old.status not in ("failed", "replaced"):
             old.status = "replaced"
@@ -709,28 +736,38 @@ def _start_session(db: Session, v: Visit, user: User, audio_path: str | None, st
     if status != "recording":
         v.ended_at = now
     v.status = "processing"
-    ss = ScribeSession(visit_id=v.id, audio_path=audio_path, status=status, last_activity_at=now,
-                       model_info={"live": {"offset": 0.0, "asr_s": 0.0}} if status == "recording" else None)
+    ss = ScribeSession(
+        visit_id=v.id,
+        audio_path=audio_path,
+        status=status,
+        job_id=str(uuid4()) if status != "recording" else None,
+        idempotency_key=idempotency_key,
+        last_activity_at=now,
+        heartbeat_at=now,
+        model_info={"live": {"offset": 0.0, "asr_s": 0.0}} if status == "recording" else None,
+    )
     db.add(ss)
     audit(db, user, "scribe_start", f"visit:{v.id}", "rekam langsung" if status == "recording" else
           ("audio" if audio_path else "teks"))
     db.commit()
-    return ss
+    return ss, True
 
 
 @app.post("/visits/{visit_id}/audio")
-async def upload_audio(visit_id: int, audio: UploadFile = File(...),
+async def upload_audio(visit_id: int, request: Request, audio: UploadFile = File(...),
                        user: User = Depends(require(*ROLE_MATRIX["clinical"])),
                        db: Session = Depends(get_db)):
     v = get_assigned_visit(db, visit_id, user)
     if v.consent is None or v.consent.decision != "setuju":
         raise HTTPException(403, "Belum ada persetujuan pasien.")
+    idem_key = (request.headers.get("idempotency-key") or "").strip()[:80] or None
     suffix = Path(audio.filename or "rekaman.webm").suffix or ".webm"
     path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}{suffix}"
-    path.write_bytes(await audio.read())
-    ss = _start_session(db, v, user, str(path))
-    pipeline.submit(SessionLocal, ss.id, settings)
-    return {"session_id": ss.id, "status": "ok"}
+    ss, created = _start_session(db, v, user, str(path), idempotency_key=idem_key)
+    if created:
+        path.write_bytes(await audio.read())
+        pipeline.submit(SessionLocal, ss.id, settings)
+    return {"session_id": ss.id, "job_id": ss.job_id, "status": "ok"}
 
 
 @app.post("/visits/{visit_id}/audio-start")
@@ -738,7 +775,7 @@ def audio_start(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clinic
                 db: Session = Depends(get_db)):
     v = get_assigned_visit(db, visit_id, user)
     path = settings.audio_dir / f"visit{v.id}-{uuid4().hex}.webm"
-    ss = _start_session(db, v, user, str(path), status="recording")
+    ss, _ = _start_session(db, v, user, str(path), status="recording")
     path.write_bytes(b"")
     return {"status": "ok", "session_id": ss.id, "next_seq": 0}
 
@@ -755,7 +792,7 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
         raise HTTPException(409, "Catatan sudah divalidasi.")
     if seq == 0 and session_id is None:
         path = settings.audio_dir / f"visit{v.id}-{int(utcnow().timestamp())}.webm"
-        ss = _start_session(db, v, user, str(path), status="recording")
+        ss, _ = _start_session(db, v, user, str(path), status="recording")
         path.write_bytes(b"")
     else:
         ss = db.get(ScribeSession, session_id) if session_id else None
@@ -778,22 +815,28 @@ async def audio_chunk(visit_id: int, seq: int = Form(...), chunk: UploadFile = F
 @app.post("/visits/{visit_id}/audio-finish")
 def audio_finish(visit_id: int, session_id: int = Form(...),
                  user: User = Depends(require(*ROLE_MATRIX["clinical"])),
-                 db: Session = Depends(get_db)):
+                 db: Session = Depends(get_db),
+                 idempotency_key: str | None = Form(None)):
     v = get_assigned_visit(db, visit_id, user)
     ss = db.get(ScribeSession, session_id)
     if ss is None or ss.visit_id != v.id:
         raise HTTPException(409, "Sesi rekaman tidak aktif.")
     if ss.status in ("queued", "transcribing", "refining", "extracting", "coding", "done"):
-        return {"session_id": ss.id, "status": "ok"}
+        return {"session_id": ss.id, "job_id": ss.job_id, "status": "ok"}
     if ss.status != "recording":
         raise HTTPException(409, "Sesi rekaman tidak aktif.")
+    now = utcnow()
     ss.status = "queued"
-    ss.closed_at = ss.last_activity_at = utcnow()
+    ss.job_id = ss.job_id or str(uuid4())
+    if idempotency_key and not ss.idempotency_key:
+        ss.idempotency_key = idempotency_key.strip()[:80]
+    ss.closed_at = ss.last_activity_at = ss.heartbeat_at = now
     ss.closed_by = user.id
-    v.ended_at = utcnow()
+    v.ended_at = now
     db.commit()
+    pipeline.notify_visit(v.id, pipeline.build_scribe_snapshot(v, ss, None))
     pipeline.submit(SessionLocal, ss.id, settings)
-    return {"session_id": ss.id, "status": "ok"}
+    return {"session_id": ss.id, "job_id": ss.job_id, "status": "ok"}
 
 
 def _recoverable_recording(db: Session, visit_id: int, session_id: int | None = None) -> ScribeSession:
@@ -864,11 +907,43 @@ def retry_scribe(visit_id: int, session_id: int,
         if not text_transcript.strip():
             raise HTTPException(409, "Audio dan transkrip tidak tersedia. Silakan rekam ulang.")
     ss.status, ss.error, ss.finished_at = "queued", None, None
+    ss.job_id = str(uuid4())
+    ss.heartbeat_at = utcnow()
     v.status = "processing"
     audit(db, user, "scribe_retry", f"visit:{v.id}", f"session:{ss.id}")
     db.commit()
+    pipeline.notify_visit(v.id, pipeline.build_scribe_snapshot(v, ss, None))
     pipeline.submit(SessionLocal, ss.id, settings, text_transcript=text_transcript)
-    return {"status": "ok", "session_id": ss.id}
+    return {"status": "ok", "session_id": ss.id, "job_id": ss.job_id}
+
+
+@app.post("/visits/{visit_id}/scribe/{session_id}/apply")
+def apply_scribe_draft(visit_id: int, session_id: int,
+                       user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                       db: Session = Depends(get_db)):
+    """Terapkan hasil draf Subjektif AI ke catatan klinis atas persetujuan dokter."""
+    v = get_assigned_visit(db, visit_id, user)
+    note = _ensure_note(db, v)
+    if note.approved_snapshot:
+        raise HTTPException(409, "Catatan sudah divalidasi dan dibekukan.")
+    ss = db.scalar(
+        select(ScribeSession)
+        .where(ScribeSession.id == session_id, ScribeSession.visit_id == v.id)
+        .execution_options(populate_existing=True)
+    )
+    if ss is None or not ss.extraction:
+        raise HTTPException(404, "Draf AI sesi ini belum tersedia.")
+    if not pipeline.apply_session_extraction(db, ss, note):
+        raise HTTPException(409, "Draf AI tidak dapat diterapkan.")
+    audit(db, user, "apply_ai_draft", f"visit:{v.id}", f"session:{ss.id}")
+    db.commit()
+    pipeline.notify_visit(v.id, pipeline.build_scribe_snapshot(v, ss, None))
+    return {
+        "status": "ok",
+        "session_id": ss.id,
+        "subjective": note.subjective,
+        "subjective_summary": note.subjective_summary,
+    }
 
 
 @app.post("/visits/{visit_id}/recording-recovery/{session_id}/abandon")
@@ -900,11 +975,14 @@ async def upload_text(visit_id: int, request: Request, transcript: str = Form(No
             text = body.get("transcript", "")
     if not text:
         raise HTTPException(400, "Transkrip tidak boleh kosong.")
-    ss = _start_session(db, v, user, None)
-    pipeline.submit(SessionLocal, ss.id, settings, text_transcript=text)
+    idem_key = (request.headers.get("idempotency-key") or "").strip()[:80] or None
+    ss, created = _start_session(db, v, user, None, idempotency_key=idem_key)
+    if created:
+        pipeline.submit(SessionLocal, ss.id, settings, text_transcript=text)
     return {
         "status": "ok",
         "session_id": ss.id,
+        "job_id": ss.job_id,
         "visit_id": v.id
     }
 
@@ -938,18 +1016,40 @@ def scribe_state(visit_id: int, user: User = Depends(require(*ROLE_MATRIX["clini
     db.expire_all()
     v = get_assigned_visit(db, visit_id, user)
     ss, failed = _review_session(v), _failed_session(v)
-    return {
-        "status": ss.status if ss else ("failed" if failed else None),
-        "error": failed.error if failed and not ss else None,
-        "n_segments": len(ss.transcript or []) if ss else 0,
-        "transcript": ss.transcript or [] if ss else [],
-        "extraction": ss.extraction if ss else None,
-        "summary": v.note.subjective_summary if v.note and ss and ss.extraction else None,
-        "fields": dict(v.note.subjective or {}) if v.note and ss and ss.extraction else None,
-        "duration_s": (ss.model_info or {}).get("duration_s") if ss else None,
-        "icd": (ss.icd_suggestions if (ss and ss.status == "done" and ss.icd_suggestions)
-                else (v.note.extra.get("icd_suggestions") if v.note and v.note.extra else None)),
-    }
+    return pipeline.build_scribe_snapshot(v, ss, failed)
+
+
+@app.get("/visits/{visit_id}/scribe/events")
+async def scribe_events(visit_id: int, request: Request,
+                        user: User = Depends(require(*ROLE_MATRIX["clinical"])),
+                        db: Session = Depends(get_db)):
+    """Server-Sent Events untuk pembaruan status Scribe & ICD-10 tanpa menahan koneksi DB."""
+    v = get_assigned_visit(db, visit_id, user)
+    initial = pipeline.build_scribe_snapshot(v, _review_session(v), _failed_session(v))
+    db.close()
+
+    loop = asyncio.get_running_loop()
+    queue = pipeline.subscribe(visit_id, loop)
+
+    async def stream():
+        try:
+            yield f"event: scribe\ndata: {json.dumps(initial, ensure_ascii=False)}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: scribe\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            pipeline.unsubscribe(visit_id, loop, queue)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/visits/{visit_id}/suggest-icd")
@@ -987,13 +1087,13 @@ def kfa_search(q: str = "", user: User = Depends(require(*ROLE_MATRIX["clinical"
     hits = []
     for code, meta in DRUGS.items():
         display = meta.get("display", "")
-        ing = meta.get("ingredient_display", "")
+        ing = " ".join(i["display"] for i in meta.get("ingredients", []))
         if not ql or ql in code.lower() or ql in display.lower() or ql in ing.lower():
             hits.append({
                 "code": code,
                 "display": display,
                 "form": meta.get("form_display", ""),
-                "dose_unit": meta.get("dose_unit", "tablet"),
+                "dose_unit": {"TAB": "tablet", "CHEWTAB": "tablet"}.get(meta.get("dose_unit", ""), meta.get("dose_unit", "tablet")),
                 "proven": meta.get("proven", True),
             })
     return hits

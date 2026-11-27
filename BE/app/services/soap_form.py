@@ -6,7 +6,7 @@ supaya menyimpan O-A-P tidak menghapus S yang sedang disusun AI, dan sebaliknya.
 import json
 import re
 
-from app.models import ClinicalNote, Visit
+from app.models import ClinicalNote, Visit, utcnow
 from app.scribe.icd import IcdRow
 from app.scribe.schemas import SUBJECTIVE_FIELDS
 
@@ -36,14 +36,17 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
     errors: list[str] = []
 
     # --- S ---
+    s_touched = False
     if "summary" in form:
         note.subjective_summary = (form.get("summary") or "").strip()
+        s_touched = True
     if any(f"s_{k}" in form for k in SUBJECTIVE_FIELDS):
         subj = dict(note.subjective or {})
         for k in SUBJECTIVE_FIELDS:
             if f"s_{k}" in form:
                 subj[k] = (form.get(f"s_{k}") or "").strip()
         note.subjective = subj
+        s_touched = True
 
     # --- O ---
     if "suhu" in form:
@@ -65,6 +68,10 @@ def apply_form(note: ClinicalNote, visit: Visit, form, rows: dict[str, IcdRow]) 
     if "exam_text" in form:
         note.exam_text = (form.get("exam_text") or "").strip()
     extra = dict(note.extra or {})
+    if s_touched:
+        extra["subjective_edited_at"] = utcnow().isoformat()
+        if form.get("subjective_source"):
+            extra["subjective_source"] = str(form.get("subjective_source"))
     for k in EXTRA_FIELDS:
         if k in form:
             extra[k] = (form.get(k) or "").strip()

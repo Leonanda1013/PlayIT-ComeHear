@@ -3,6 +3,7 @@
 Provider baru mengembalikan ProviderResult dari llm_types; usage_report() memberikan
 salinan metadata per instance/job tanpa prompt atau respons klinis.
 """
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from importlib import import_module
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
+from app.scribe.circuit_breaker import CircuitBreaker, DEFAULT_BREAKER
 from app.scribe.llm_claude import ClaudeProvider
 from app.scribe.llm_types import Attempt, LLMError, ProviderResult, T, TokenUsage, error_kind, token_count
 
@@ -127,9 +129,17 @@ PROVIDERS: dict[str, Callable] = {
 
 
 class LLM:
-    def __init__(self, s: Settings, mock: Callable[[str, type[T]], T] | None = None):
+    def __init__(
+        self,
+        s: Settings,
+        mock: Callable[[str, type[T]], T] | None = None,
+        *,
+        breaker: CircuitBreaker | None = None,
+    ):
         self.providers = []
         self.mock = mock
+        self.total_timeout_s = s.llm_total_timeout_s
+        self.breaker = breaker or DEFAULT_BREAKER
         self._calls: list[dict] = []
         self._configuration_errors: list[str] = []
         names = s.provider_list
@@ -141,7 +151,12 @@ class LLM:
             if name == "mock":
                 continue
             try:
-                self.providers.append(PROVIDERS[name](s))
+                factory = PROVIDERS[name]
+                if breaker is not None and "breaker" in inspect.signature(factory).parameters:
+                    provider = factory(s, breaker=breaker)
+                else:
+                    provider = factory(s)
+                self.providers.append(provider)
             except Exception as exc:
                 # Hanya konfigurasi provider yang boleh dilewati, bukan bug adapter.
                 if not isinstance(exc, (LLMError, ImportError)):
@@ -175,15 +190,23 @@ class LLM:
                                               a["usage"]["output_tokens"] is None for a in attempts),
                 "complete": bool(attempts) and all(a["usage"]["input_tokens"] is not None and
                                                   a["usage"]["output_tokens"] is not None for a in attempts),
+                "fallback_calls": sum(1 for c in calls if any(a["status"] == "error" for a in c["attempts"])),
                 "skipped_providers": list(self._configuration_errors)}
 
     def generate(self, system: str, prompt: str, schema: type[T]) -> tuple[T, str]:
         errors = []
+        deadline = time.monotonic() + self.total_timeout_s
         for p in self.providers:
+            if time.monotonic() >= deadline:
+                errors.append("transient")
+                break
             try:
-                result = p.generate(system, prompt, schema)
+                if "deadline" in inspect.signature(p.generate).parameters:
+                    result = p.generate(system, prompt, schema, deadline=deadline)
+                else:
+                    result = p.generate(system, prompt, schema)
             except LLMError as e:
-                attempts = e.attempts or (Attempt(p.name, "unknown", 0.0, "error", error_kind=e.kind),)
+                attempts = e.attempts or (Attempt(p.name, "unknown", 0.0, "error", error_kind=e.kind, error_reason=e.reason),)
                 self._record(schema, attempts)
                 errors.append(e.kind)
                 continue
@@ -192,7 +215,7 @@ class LLM:
             except ValidationError:
                 # Defensif terhadap adapter yang melanggar kontrak; usage tetap tercatat.
                 self._record(schema, result.attempts + (
-                    Attempt(p.name, result.model, 0.0, "error", error_kind="invalid_output"),))
+                    Attempt(p.name, result.model, 0.0, "error", error_kind="invalid_output", error_reason="validation_error"),))
                 errors.append("invalid_output")
                 continue
             self._record(schema, result.attempts or (Attempt(p.name, result.model, 0.0, "ok"),))

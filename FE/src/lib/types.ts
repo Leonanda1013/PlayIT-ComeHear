@@ -105,16 +105,19 @@ export type Consultation = {
   }
   note: ClinicalNote
   session: {
-    id: number; status: string; transcript: TranscriptSegment[]
+    id: number; job_id?: string | null; status: string; transcript: TranscriptSegment[]
     extraction: Record<string, ExtractionField | string> | null
+    subjective_ready?: boolean; icd_ready?: boolean; applied_to_note?: boolean; manual_conflict?: boolean
     icd_suggestions: IcdSuggestionsResult | IcdSuggestion[] | null; error: string | null; has_audio: boolean
   } | null
   failed_session: { id: number; error: string } | null
 }
 
 export type ScribeState = {
-  status: string | null; error: string | null; transcript: TranscriptSegment[]
-  extraction?: Record<string, ExtractionField | string | unknown> | null
+  status: string | null; error: string | null; job_id?: string | null
+  transcript: TranscriptSegment[]
+  extraction?: Record<string, ExtractionField | string> | null
+  subjective_ready?: boolean; icd_ready?: boolean; applied_to_note?: boolean; manual_conflict?: boolean
   summary: string | null; fields: Record<string, string> | null
   icd: IcdSuggestionsResult | IcdSuggestion[] | null; duration_s: number | null
 }

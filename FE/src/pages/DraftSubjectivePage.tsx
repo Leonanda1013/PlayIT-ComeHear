@@ -1,21 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, AudioLines, Check, CheckCircle2, LoaderCircle, Mic, Pause, Play, Quote, RefreshCw, X } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { ConsentBlock, useConsent } from '@/components/Consent'
 import { TranscriptBubble } from '@/components/Scribe'
 import { Notice, TextArea } from '@/components/ui/kit'
 import { apiRequest } from '@/lib/api'
-import { getScribe, retryScribe, saveSoap, subjectiveFields, visitPath } from '@/lib/clinical'
+import { applyAiDraft, retryScribe, saveSoap, SCRIBE_ACTIVE_STATUSES, SCRIBE_S_PROCESSING_STATUSES, subjectiveFields, visitPath } from '@/lib/clinical'
 import { mmss } from '@/lib/format'
+import { useScribeMonitor } from '@/lib/useScribeMonitor'
 import type { Consultation, ExtractionField } from '@/lib/types'
 
 const statusLabel: Record<string, string> = {
   recording: 'Merekam…', queued: 'Menyiapkan transkrip…', transcribing: 'Mentranskrip percakapan…', refining: 'Menyempurnakan transkrip…',
-  extracting: 'Menyusun draf Subjektif…', coding: 'Menyusun usulan ICD-10…', done: 'Rekaman Tersimpan', failed: 'Pemrosesan gagal',
+  extracting: 'Menyusun draf Subjektif…', coding: 'Draf S siap · menyusun ICD-10…', done: 'Rekaman Tersimpan', failed: 'Pemrosesan gagal',
 }
-const PROCESSING = ['recording', 'queued', 'transcribing', 'refining', 'extracting', 'coding']
 
 /** Label tampilan bagian S (mengikuti desain); field kosong yang opsional disembunyikan. */
 const S_LABELS: [string, string, boolean][] = [
@@ -32,17 +32,19 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
+  const searchParams = new URLSearchParams(location.search)
   const redirectReason = (location.state as { redirectReason?: string } | null)?.redirectReason ||
-    new URLSearchParams(location.search).get('alasan')
+    searchParams.get('alasan')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [fields, setFields] = useState<Record<string, string>>(data.note.subjective || {})
   const [summary, setSummary] = useState(data.note.subjective_summary || '')
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(() => searchParams.get('manual') === '1')
   const [dirty, setDirty] = useState(false)
   const [backup, setBackup] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const {
     consent,
     decide,
@@ -52,19 +54,42 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
     setRelation,
     saved,
   } = useConsent(data, setError)
-  const scribe = useQuery({
-    queryKey: ['scribe', id], queryFn: () => getScribe(id), enabled: !!(data.session || data.failed_session),
-    refetchInterval: (query) => PROCESSING.includes(query.state.data?.status || data.session?.status || '') ? 1500 : false,
-  })
+  const { scribe } = useScribeMonitor(data)
   const status = scribe.data?.status || data.session?.status || ''
-  useEffect(() => { if ((status === 'done' || status === 'failed') && data.session?.status !== status) void queryClient.invalidateQueries({ queryKey: ['consultation', id] }) }, [status, data.session?.status, queryClient, id])
 
   const draftFields = dirty ? fields : { ...fields, ...(scribe.data?.fields || {}) }
   const draftSummary = dirty ? summary : scribe.data?.summary || summary
   const transcript = scribe.data?.transcript?.length ? scribe.data.transcript : data.session?.transcript || []
   const extraction = (scribe.data?.extraction || data.session?.extraction || {}) as Record<string, ExtractionField | string | unknown>
-  const processing = PROCESSING.includes(status)
+  const processing = (SCRIBE_ACTIVE_STATUSES as readonly string[]).includes(status)
+  const sProcessing = (SCRIBE_S_PROCESSING_STATUSES as readonly string[]).includes(status)
   const failed = status === 'failed' || (!data.session && !!data.failed_session)
+  const manualConflict = Boolean(
+    scribe.data?.manual_conflict ||
+    scribe.data?.applied_to_note === false ||
+    data.session?.manual_conflict ||
+    data.session?.applied_to_note === false
+  )
+  const hasExtraction = Boolean(scribe.data?.subjective_ready || scribe.data?.extraction || data.session?.extraction)
+
+  async function applyDraftFromAi() {
+    const sessionId = data.session?.id
+    if (!sessionId || busy) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const res = await applyAiDraft(id, sessionId)
+      setFields(res.subjective || {})
+      setSummary(res.subjective_summary || '')
+      setDirty(false)
+      setNotice('Draf Subjektif AI berhasil diterapkan.')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['consultation', id] }),
+        queryClient.invalidateQueries({ queryKey: ['scribe', id] }),
+      ])
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Gagal menerapkan draf AI.')
+    } finally { setBusy(false) }
+  }
 
   async function retryProcessing() {
     const sessionId = data.failed_session?.id || data.session?.id
@@ -157,10 +182,16 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
   }
 
   async function saveAndContinue() {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setNotice('')
     try {
       await saved()
-      await saveSoap(id, { step: 's', action: 'to_oap', summary: draftSummary, ...Object.fromEntries(subjectiveFields.map(([key]) => [`s_${key}`, draftFields[key] || ''])) })
+      await saveSoap(id, {
+        step: 's',
+        action: 'to_oap',
+        subjective_source: dirty ? 'manual' : 'ai_reviewed',
+        summary: draftSummary,
+        ...Object.fromEntries(subjectiveFields.map(([key]) => [`s_${key}`, draftFields[key] || ''])),
+      })
       await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
       navigate(`/kunjungan/${id}/objektif`)
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Koreksi Subjektif belum tersimpan.') }
@@ -195,7 +226,14 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
       }
     />
     {redirectReason && <Notice tone="info">{redirectReason}</Notice>}
+    {notice && <Notice tone="ok">{notice}</Notice>}
     {error && <Notice tone="bad">{error}</Notice>}
+    {manualConflict && hasExtraction && (
+      <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[#f0d08a] bg-[#fffaf0] px-4 py-3 text-xs text-[#78350f]">
+        <p><b className="font-semibold">Draf Subjektif AI selesai, tetapi isian manual Anda dipertahankan.</b> Anda dapat menerapkan hasil AI kapan saja jika diinginkan.</p>
+        <button type="button" disabled={busy} onClick={() => void applyDraftFromAi()} className="inline-flex h-8 items-center rounded-[8px] bg-ch-brand px-3 font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50">Terapkan Draf AI</button>
+      </div>
+    )}
 
     <section className="flex min-h-[88px] flex-wrap items-center gap-3 rounded-[16px] border border-[#dce6eb] bg-[#fbfdfe] px-[19px] py-4 lg:flex-nowrap" aria-live="polite">
       <span className={`inline-flex h-[38px] shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[8px] border px-3.5 text-[14px] font-semibold ${failed ? 'border-[#f3b6b6] bg-ch-bad-soft text-ch-bad' : 'border-[#9adbe5] bg-[#d9f3f6] text-[#0b6e7d]'}`}>{processing ? <LoaderCircle className="size-4 animate-spin" /> : <span className={`size-2 rounded-full ${failed ? 'bg-ch-bad' : 'bg-[#0b6e7d]'}`} />}{pillLabel}</span>
@@ -206,7 +244,7 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
         <button type="button" className={soft} onClick={togglePlay} disabled={!data.session?.has_audio}>{playing ? <Pause className="size-3.5" /> : <Play className="size-3 fill-current" />} {playing ? 'Jeda' : 'Putar Ulang'}</button>
         {failed && <button type="button" className={soft} disabled={busy || consent !== 'setuju'} onClick={retryProcessing}><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />{busy ? 'Mencoba Lagi…' : 'Coba Proses Lagi'}</button>}
         {(status === 'recording' || (status === 'done' && data.session?.has_audio)) && <button type="button" className={soft} disabled={busy} onClick={() => navigate(`/kunjungan/${id}/subjektif`, { state: { resumeSessionId: data.session?.id } })}><Play className="size-4" /> Lanjutkan Rekaman</button>}
-        <button type="button" className={soft} disabled={busy || processing} onClick={() => navigate(`/kunjungan/${id}/subjektif`)}><Mic className="size-4" /> Rekam Ulang</button>
+        <button type="button" className={soft} disabled={busy || sProcessing} onClick={() => navigate(`/kunjungan/${id}/subjektif`)}><Mic className="size-4" /> Rekam Ulang</button>
       </div>
     </section>
 
@@ -265,7 +303,8 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
           <h2 className="text-[20px] font-bold text-ch-ink">Subjektif</h2>
           <span className="inline-flex h-[30px] items-center rounded-full border border-[#8fd6e1] bg-[#dff4f7] px-3 text-[13px] font-semibold text-[#0b6e7d]">Draf AI • Grounded</span>
         </div>
-        {processing && <p role="status" className="mt-3 flex items-center gap-2 rounded-[8px] bg-[#eef6f8] p-2.5 text-[12px] text-[#53697b]"><LoaderCircle className="size-4 animate-spin text-ch-brand" /> {statusLabel[status]}</p>}
+        {sProcessing && <p role="status" className="mt-3 flex items-center gap-2 rounded-[8px] bg-[#eef6f8] p-2.5 text-[12px] text-[#53697b]"><LoaderCircle className="size-4 animate-spin text-ch-brand" /> {statusLabel[status]} Anda tetap dapat langsung mengisi manual atau lanjut ke Objektif.</p>}
+        {status === 'coding' && <p role="status" className="mt-3 flex items-center gap-2 rounded-[8px] bg-[#edf9fb] p-2.5 text-[12px] text-[#0b6e7d]"><LoaderCircle className="size-4 animate-spin text-ch-brand" /> Draf Subjektif sudah siap. Usulan ICD-10 masih disusun di latar belakang.</p>}
         <div className="mt-[18px] space-y-[14px]">
           {S_LABELS.filter(([key, , always]) => always || draftFields[key]).map(([key, label]) => {
             const meta = typeof extraction[key] === 'object' && extraction[key] !== null ? (extraction[key] as ExtractionField) : null
@@ -361,8 +400,8 @@ export function DraftSubjectivePage({ data }: { data: Consultation }) {
           )}
         </div>
         <div className="mt-[15px] flex items-center justify-center gap-14">
-          <button type="button" className="inline-flex h-9 min-w-[127px] items-center justify-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand disabled:opacity-50" onClick={() => setEditing(!editing)} disabled={processing}>{editing && <Check className="size-4" />}{editing ? 'Selesai edit' : 'Edit rangkuman'}</button>
-          <button type="button" className="inline-flex h-9 min-w-[140px] items-center justify-center rounded-[8px] bg-ch-brand px-4 text-[14px] font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50" disabled={busy || processing} onClick={saveAndContinue}>{busy ? 'Menyimpan…' : 'Lanjut ke Objektif'}</button>
+          <button type="button" className="inline-flex h-9 min-w-[127px] items-center justify-center gap-1.5 rounded-[8px] border border-[#dce6eb] bg-[#eef4f7] px-4 text-[14px] font-medium text-[#3d5266] hover:border-ch-brand disabled:opacity-50" onClick={() => setEditing(!editing)} disabled={busy}>{editing && <Check className="size-4" />}{editing ? 'Selesai edit' : sProcessing ? 'Isi S Manual' : 'Edit rangkuman'}</button>
+          <button type="button" className="inline-flex h-9 min-w-[140px] items-center justify-center rounded-[8px] bg-ch-brand px-4 text-[14px] font-semibold text-white hover:bg-ch-brand-hover disabled:opacity-50" disabled={busy} onClick={saveAndContinue}>{busy ? 'Menyimpan…' : 'Lanjut ke Objektif'}</button>
         </div>
       </section>
     </div>

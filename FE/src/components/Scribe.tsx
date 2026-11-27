@@ -29,12 +29,22 @@ export function RecorderBar({
 
 const BAR_COUNT = 36
 
-export function Waveform({ stream }: { stream?: MediaStream | null }) {
+export type MicLevelHint = 'quiet' | 'clipping' | null
+
+export function Waveform({ stream, onLevelHint }: { stream?: MediaStream | null; onLevelHint?: (hint: MicLevelHint) => void }) {
   const [levels, setLevels] = useState<number[]>(() => Array.from({ length: BAR_COUNT }, () => 6))
   const animFrame = useRef<number | null>(null)
+  const hintCallback = useRef(onLevelHint)
 
   useEffect(() => {
-    if (!stream || !stream.active) return
+    hintCallback.current = onLevelHint
+  }, [onLevelHint])
+
+  useEffect(() => {
+    if (!stream || !stream.active) {
+      hintCallback.current?.(null)
+      return
+    }
 
     let audioCtx: AudioContext | null = null
     try {
@@ -48,9 +58,45 @@ export function Waveform({ stream }: { stream?: MediaStream | null }) {
 
       const bufferLength = analyser.frequencyBinCount
       const dataArray = new Uint8Array(bufferLength)
+      const timeDomain = new Uint8Array(analyser.fftSize)
+      let quietSince = 0
+      let clipUntil = 0
+      let lastHint: MicLevelHint = null
+
+      const reportHint = (next: MicLevelHint) => {
+        if (next !== lastHint) {
+          lastHint = next
+          hintCallback.current?.(next)
+        }
+      }
 
       const render = () => {
         analyser.getByteFrequencyData(dataArray)
+        analyser.getByteTimeDomainData(timeDomain)
+        let sumSq = 0
+        let maxAbs = 0
+        for (let i = 0; i < timeDomain.length; i += 1) {
+          const sample = (timeDomain[i] - 128) / 128
+          const abs = Math.abs(sample)
+          if (abs > maxAbs) maxAbs = abs
+          sumSq += sample * sample
+        }
+        const rms = Math.sqrt(sumSq / timeDomain.length)
+        const now = performance.now()
+        if (maxAbs >= 0.96) {
+          clipUntil = now + 2000
+          quietSince = 0
+          reportHint('clipping')
+        } else if (now < clipUntil) {
+          reportHint('clipping')
+        } else if (rms < 0.008) {
+          if (!quietSince) quietSince = now
+          if (now - quietSince >= 3500) reportHint('quiet')
+        } else {
+          quietSince = 0
+          reportHint(null)
+        }
+
         const step = Math.floor(bufferLength / BAR_COUNT) || 1
         const nextLevels = Array.from({ length: BAR_COUNT }, (_, i) => {
           const val = dataArray[Math.min(i * step, bufferLength - 1)] || 0
@@ -69,6 +115,7 @@ export function Waveform({ stream }: { stream?: MediaStream | null }) {
 
     return () => {
       if (animFrame.current) cancelAnimationFrame(animFrame.current)
+      hintCallback.current?.(null)
       if (audioCtx && audioCtx.state !== 'closed') {
         audioCtx.close().catch(() => undefined)
       }

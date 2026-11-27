@@ -83,12 +83,15 @@ def mock_generate(prompt: str, schema):
                     alasan="mock diagnosis utama")
             for n, c in enumerate(cands[:3])
         ]
+        rpd_line = next((ln.split(":", 1)[1].strip() for ln in prompt.splitlines() if ln.startswith("RPD:")), "")
+        has_rpd = bool(rpd_line and rpd_line != "-" and not re.match(r"^(tidak|belum|nggak|ga|disangkal|nihil)", rpd_line, re.I))
+        has_sec = has_rpd or "dehydration" in prompt.lower() or "volume depletion" in prompt.lower()
         sekunder = []
-        if len(cands) > 3:
+        if has_sec and len(cands) > 3:
             sekunder = [
                 IcdPick(code=c["code"], deskripsi_id=c.get("display") or c["code"], keyakinan=round(0.6 - n * 0.1, 2),
                         alasan="mock diagnosis sekunder")
-                for n, c in enumerate(cands[3:5])
+                for n, c in enumerate(cands[3:6])
             ]
         return IcdRerankResult(utama=utama, sekunder=sekunder)
     raise ValueError(f"mock tidak mendukung {schema}")

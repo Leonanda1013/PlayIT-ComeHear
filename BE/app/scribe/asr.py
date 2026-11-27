@@ -10,26 +10,23 @@ from pathlib import Path
 
 from app.config import BASE_DIR, Settings
 
-# Prompt awal Whisper: konteks + kosakata yang sering muncul. Dibuat singkat karena daftar kata yang
-# terlalu panjang bisa membuat Whisper "mendengar" istilah itu di bagian hening (halusinasi).
+# Prompt awal Whisper: kalimat percakapan klinis alami (bukan daftar kata lepas panjang agar tidak
+# memicu halusinasi di jeda hening), memuat ejaan kata yang sering salah dengar di poli umum.
 PROMPT_DEWASA = (
-    "Percakapan konsultasi dokter dengan pasien dewasa di poli rawat jalan, bahasa Indonesia "
-    "kadang campur bahasa Jawa. Sapaan: duduk dulu dok, monggo pinarak. "
-    "Keluhan: pusing berputar, sakit kepala cenat-cenut, demam, batuk, "
-    "sesak napas, nyeri ulu hati, mual, muntah, BAB cair, diare, lendir, darah pada BAB, seblak, lauk pedas, lemas. "
-    "Ungkapan: mboten enten dok, tetep mangan, dituku di apotek. Riwayat darah tinggi, gula darah, maag, "
-    "alergi obat. Obat: parasetamol, amlodipin, metformin, omeprazol, obat anti diare, oralit."
+    "Konsultasi dokter dan pasien poli umum, bahasa Indonesia campur bahasa Jawa. "
+    "Selamat pagi, monggo duduk dulu, Dok. Wonten punopo, ada keluhan apa? "
+    "Kulo gerah telung dino, pitung dino, saben dino kepala pusing cenat-cenut, kecapean, pandangan kabur, "
+    "demam, batuk berdahak, sesak napas, nyeri ulu hati, mual muntah, diare BAB cair berlendir, lemas. "
+    "Tekanan darah, asma tidak ada, mboten wonten, mboten enten, Dok, nanging ngunjuk parasetamol, "
+    "amlodipin, metformin, omeprazol, antasida, oralit."
 )
-# Prompt lama untuk skenario poli anak (dipakai bila ASR_PROMPT=anak).
+# Prompt khusus skenario poli anak (dipakai bila ASR_PROMPT=anak).
 PROMPT_ANAK = (
-    "Percakapan konsultasi dokter spesialis anak dengan ibu pasien di poli rawat jalan, "
-    "bahasa Indonesia campur bahasa Jawa Timuran. Sapaan: duduk dulu dok, monggo pinarak, silakan duduk. "
-    "Keluhan: demam tinggi, sumer, nggreges, panas adem, batuk grok-grok, pilek, mual, "
-    "muntah, diare, mencret, feses ada lendir, darah pada BAB, sesak, ngelu, lemes, kejang demam, mimisan, "
-    "biduran, ruam gatal, seblak pedas, lauk. "
-    "Ungkapan: keluhan mboten enten dok, tetep mangan bubur, dituku nang apotek. "
-    "Obat: parasetamol sirup, sanmol, tempra, proris, ibuprofen, amoksisilin, cefixime, oralit, zink, obat anti diare. "
-    "Suhu tubuh tiga puluh delapan koma sembilan derajat, berat badan tujuh belas setengah kilo."
+    "Konsultasi dokter anak dengan ibu pasien, bahasa Indonesia campur bahasa Jawa Timuran. "
+    "Selamat siang, silakan duduk dulu, Dok. Anak kulo gerah, sumer, nggreges, demam tinggi, "
+    "batuk grok-grok berdahak, pilek, sesak napas, ngelu, mual muntah, diare mencret, kejang demam, mimisan, biduran. "
+    "Mboten enten, Dok, tetep mangan bubur, dituku di apotek: parasetamol sirup, ibuprofen, amoksisilin, oralit, zink. "
+    "Suhu tiga puluh delapan koma sembilan derajat, berat badan tujuh belas setengah kilo."
 )
 PROMPTS = {"dewasa": PROMPT_DEWASA, "anak": PROMPT_ANAK, "none": None}
 INITIAL_PROMPT: str | None = PROMPT_DEWASA
@@ -41,27 +38,83 @@ def prompt_for(s: Settings) -> str | None:
 
 # Aturan koreksi fonetik dan istilah klinis/dialek pasca-ASR
 PHONETIC_CORRECTIONS: list[tuple[re.Pattern, str]] = [
-    # Voicing & Consonants
+    # Sapaan dokter yang sering tertukar oleh Whisper ("Tok", "Top", "otok", "dogg", "dong")
+    (re.compile(r"\bdogg?\b(?=[\s,\.\?!]|$)", re.I), "dok"),
+    (re.compile(r"(?<=,\s)(?:tok|top|otok)(?=[\s,\.\?!]|$)", re.I), "dok"),
+    (
+        re.compile(
+            r"\b(iya|ya|nggak|gak|ga|tidak|bukan|oke|baik|siap|ini|sakit|mual|pusing|sembuh|ada|"
+            r"kenapa|gimana|berapa|lama|minggu|hari|bulan|bersing-bersing|kampu|sih|lagi)\s+"
+            r"(?:tok|top|otok)(?=[\s,\.\?!]|$)",
+            re.I,
+        ),
+        r"\1 dok",
+    ),
+    (
+        re.compile(
+            r"\b(sakit|siap|baik|pusing|mual|demam|batuk|sembuh|ada)\s+dong(?=[\s,\.\?!]|$)",
+            re.I,
+        ),
+        r"\1 dok",
+    ),
+    (re.compile(r"\bblipistok\b", re.I), "pelipis dok"),
+    (re.compile(r"\bmewaltok\b", re.I), "mual dok"),
+
+    # Gejala, anatomi & istilah klinis yang sering meleset
     (re.compile(r"\b(?:tutu[-\s]?tulu|tutu[-\s]?dulu|duduk[-\s]?tulu)\b", re.I), "duduk dulu"),
     (re.compile(r"\blentir\b", re.I), "lendir"),
     (re.compile(r"\btiare\b", re.I), "diare"),
+    (re.compile(r"\bmencrit\b", re.I), "mencret"),
     (re.compile(r"\bGabrinya\b", re.I), "BAB-nya"),
     (re.compile(r"\b(?:darah\s+)?patah\s+(?:BAP|BAB)\b", re.I), "darah pada BAB"),
     (re.compile(r"\bpatah\s+(?:BAP|BAB)\b", re.I), "pada BAB"),
     (re.compile(r"\bBAP\b(?=\s*(?:cair|keras|encer|berdarah|berlendir|-nya|nya|\.|\,|$))", re.I), "BAB"),
+    (re.compile(r"\bpatuk[-\s]?patuk\b", re.I), "batuk-batuk"),
+    (re.compile(r"\bbatunya(?=\s+(?:kering|berdaha[k]?|cair|sudah|udah|muncul|terasa|kambuh|kampu|lama|nggak|tidak))", re.I), "batuknya"),
+    (re.compile(r"\bbatu(?=\s+(?:berdaha[k]?|kering|lama|kronis))", re.I), "batuk"),
+    (re.compile(r"\bberdaha\b", re.I), "berdahak"),
+    (re.compile(r"\bsessana\s*fas\b|\bseseat\s+nafas\b|\bsesak\s+nafas\b", re.I), "sesak napas"),
+    (re.compile(r"\bbersing[-\s]?bersing\b", re.I), "bersin-bersin"),
+    (re.compile(r"\bkampu\b", re.I), "kambuh"),
+    (re.compile(r"\btekanan\s+daerah\b", re.I), "tekanan darah"),
+    (re.compile(r"\b(?:handangan|padangan)(?=\s+kabur)\b", re.I), "pandangan"),
+    (re.compile(r"\bcenot[-\s]?cenot\b", re.I), "cenat-cenut"),
+    (re.compile(r"\bakamual\b", re.I), "agak mual"),
+    (re.compile(r"\b(?:mutah|putah)\b", re.I), "muntah"),
+    (re.compile(r"\btercapaian\b", re.I), "kecapean"),
+    (re.compile(r"\bkelohan\b", re.I), "keluhan"),
+    (re.compile(r"\bgejela\b", re.I), "gejala"),
+    (re.compile(r"\bbepak\b", re.I), "bapak"),
+    (re.compile(r"\bpusinnya\b", re.I), "pusingnya"),
+    (re.compile(r"\bpusin\b", re.I), "pusing"),
+    (re.compile(r"\bpolati\s+tur\b", re.I), "pola tidur"),
+
+    # Negasi klinis & dialek Jawa Krama/Ngoko
+    (re.compile(r"\basmat\s+kita\s+ada\b", re.I), "asma tidak ada"),
+    (re.compile(r"\b(?:buat\s+)?ternenten\b", re.I), "mboten enten"),
+    (re.compile(r"\bboten\s+enten\b", re.I), "mboten enten"),
+    (re.compile(r"\bm?boten\s+wanton\b", re.I), "mboten wonten"),
+    (re.compile(r"\bboten\b", re.I), "mboten"),
+    (re.compile(r"\bbotan(?=\s*,?\s*(?:kula|kulo|wonten|enten|dok|pak|bu))", re.I), "mboten"),
+    (re.compile(r"\bbotek(?=\s+(?:kabur|wonten|enten|sakit|ada|sampai|muntah|putah))", re.I), "mboten"),
+    (re.compile(r"\bwontan\b", re.I), "wonten"),
+    (re.compile(r"\bkulohiro\b", re.I), "kulo kiro"),
+    (re.compile(r"\bsambedino\b", re.I), "saben dino"),
+    (re.compile(r"\bpitong(?=\s+dino)\b", re.I), "pitung"),
+    (re.compile(r"\btelong(?=\s+dino)\b", re.I), "telung"),
+    (re.compile(r"\btetemangan\b", re.I), "tetep mangan"),
+
+    # Obat & istilah harian pasien
+    (re.compile(r"\bpara\s+setamol\b", re.I), "parasetamol"),
     (re.compile(r"\b(makan|habis|jajan|beli|nyemil|cemilan)\s+sebelah\b", re.I), r"\1 seblak"),
     (re.compile(r"\bsebelah\s+(pedas|pedes|level|kuah|jeletot|ceker|cilok)\b", re.I), r"seblak \1"),
     (re.compile(r"\blau\b(?=\s*(?:pauk|makan|nasi|ayam|tahu|tempe|ikan|\.|\,|$))", re.I), "lauk"),
     (re.compile(r"\bberatikan\b", re.I), "perhatikan"),
-    (re.compile(r"\b(?:buat\s+)?ternenten\b", re.I), "mboten enten"),
-    (re.compile(r"\bboten\s+enten\b", re.I), "mboten enten"),
-    (re.compile(r"\bdog\b(?=[\s,\.\?!]|$)", re.I), "dok"),
-    (re.compile(r"\btetemangan\b", re.I), "tetep mangan"),
     (re.compile(r"\bmudah\s+di\s*jernah\b", re.I), "mudah dicerna"),
     (re.compile(r"\bmudah\s+dicernah\b", re.I), "mudah dicerna"),
     (re.compile(r"\bdi\s*jernah\b", re.I), "dicerna"),
     (re.compile(r"\bopat\b", re.I), "obat"),
-    (re.compile(r"\bantidiari\b", re.I), "anti diare"),
+    (re.compile(r"\banti\s*diari\b", re.I), "anti diare"),
     (re.compile(r"\b(obat[a-z]*|sirup|puyer|resep)\s+(?:nya\s+)?dituduh\b", re.I), r"\1 dituku"),
     (re.compile(r"\bdituduh\s+(?:di\s+)?(apotek|toko|warung)\b", re.I), r"dituku di \1"),
     (re.compile(r"\bdi\s+tuduh\s+(?:di\s+)?(apotek|toko|warung)\b", re.I), r"dituku di \1"),
@@ -118,27 +171,123 @@ def _split_sentences(text: str, start: float, end: float) -> list[tuple[float, f
     return out
 
 
-def decode_audio(path: str, sr: int = 16000):
-    """Dekode ke float32 mono 16 kHz. Ditulis sendiri karena decode_audio bawaan faster-whisper
-    1.2 memanggil av.open(metadata_errors=...) yang sudah dihapus di PyAV 15+."""
+def _resample_and_filter(container, stream, sr: int, highpass_hz: int):
+    import av
+    resampler = av.AudioResampler(format="flt", layout="mono", rate=sr)
+    abuf = sink = graph = None
+    if highpass_hz > 0:
+        graph = av.filter.Graph()
+        abuf = graph.add_abuffer(format="flt", sample_rate=sr, layout="mono")
+        hp = graph.add("highpass", f"f={highpass_hz}")
+        sink = graph.add("abuffersink")
+        abuf.link_to(hp)
+        hp.link_to(sink)
+        graph.configure()
+
+    chunks = []
+
+    def _emit(frame):
+        if graph is None:
+            chunks.append(frame.to_ndarray().reshape(-1))
+            return
+        abuf.push(frame)
+        while True:
+            try:
+                chunks.append(sink.pull().to_ndarray().reshape(-1))
+            except av.error.FFmpegError:
+                break
+
+    try:
+        for frame in container.decode(stream):
+            for f in resampler.resample(frame):
+                _emit(f)
+    except av.error.FFmpegError:
+        # Saat rekaman masih berjalan, potongan terakhir bisa belum lengkap: pakai yang sudah terbaca.
+        pass
+    for f in resampler.resample(None):
+        _emit(f)
+    if graph is not None:
+        try:
+            abuf.push(None)
+            while True:
+                chunks.append(sink.pull().to_ndarray().reshape(-1))
+        except av.error.FFmpegError:
+            pass
+    return chunks
+
+
+def preprocess_audio(
+    audio,
+    sr: int = 16000,
+    *,
+    target_rms: float = 0.085,
+    noise_floor_rms: float = 0.005,
+    max_gain: float = 4.5,
+    min_gain: float = 0.5,
+):
+    """Normalisasi kenyaringan bertarget ucapan (speech-gated) + soft peak limiter.
+
+    Suara pasien yang pelan diangkat agar terbaca jelas oleh Silero VAD & Whisper,
+    sementara bagian hening di bawah noise_floor_rms tidak diperkuat agar tidak memicu halusinasi.
+    """
+    import numpy as np
+
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.size == 0 or float(np.max(np.abs(arr))) == 0.0:
+        return arr
+
+    # Buang DC offset tanpa menggeser sinyal nol
+    arr = arr - np.float32(np.mean(arr))
+
+    frame_len = max(1, int(0.25 * sr))
+    n_frames = max(1, (arr.size + frame_len - 1) // frame_len)
+    pad = n_frames * frame_len - arr.size
+    padded = np.pad(arr, (0, pad)) if pad else arr
+    frames = padded.reshape(n_frames, frame_len)
+    rms = np.sqrt(np.mean(frames * frames, axis=1) + 1e-12)
+
+    # Hanya segmen di atas noise_floor_rms yang dinaikkan; puncak sangat keras tetap diturunkan.
+    desired = np.where(
+        rms >= noise_floor_rms,
+        np.clip(target_rms / rms, min_gain, max_gain),
+        np.minimum(1.0, target_rms / np.maximum(rms, 1e-6)),
+    ).astype(np.float32)
+
+    # Haluskan transisi gain antarblok 250 ms supaya tidak ada bunyi klik
+    if n_frames > 1:
+        kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+        desired = np.convolve(np.pad(desired, 1, mode="edge"), kernel, mode="valid")
+
+    centers = (np.arange(n_frames, dtype=np.float64) + 0.5) * frame_len
+    gains = np.interp(np.arange(arr.size, dtype=np.float64), centers, desired).astype(np.float32)
+    leveled = arr * gains
+
+    # Soft limiter di atas ambang 0.85 untuk mencegah clipping keras pada puncak mendadak
+    threshold = np.float32(0.85)
+    abs_x = np.abs(leveled)
+    over = abs_x > threshold
+    if np.any(over):
+        headroom = np.float32(0.13)
+        compressed = threshold + headroom * np.tanh((abs_x[over] - threshold) / headroom)
+        leveled[over] = np.sign(leveled[over]) * compressed
+
+    return np.clip(leveled, -0.99, 0.99).astype(np.float32)
+
+
+def decode_audio(path: str, sr: int = 16000, *, highpass_hz: int = 80):
+    """Dekode ke float32 mono 16 kHz dengan filter high-pass 80 Hz. Ditulis sendiri karena
+    decode_audio bawaan faster-whisper 1.2 memanggil av.open(metadata_errors=...) yang dihapus di PyAV 15+."""
     import av
     import numpy as np
-    resampler = av.AudioResampler(format="s16", layout="mono", rate=sr)
-    chunks = []
     with av.open(path, mode="r") as container:
         stream = container.streams.audio[0]
-        try:
-            for frame in container.decode(stream):
-                for f in resampler.resample(frame):
-                    chunks.append(f.to_ndarray().reshape(-1))
-        except av.error.FFmpegError:
-            # Saat rekaman masih berjalan, potongan terakhir bisa belum lengkap: pakai yang sudah terbaca.
-            pass
-        for f in resampler.resample(None):
-            chunks.append(f.to_ndarray().reshape(-1))
+        chunks = _resample_and_filter(container, stream, sr, highpass_hz)
     if not chunks:
         return np.zeros(0, dtype=np.float32)
-    return np.concatenate(chunks).astype(np.float32) / 32768.0
+    out = np.concatenate(chunks)
+    if out.dtype != np.float32:
+        out = out.astype(np.float32)
+    return out
 
 
 def _run(audio, s: Settings, offset: float = 0.0, model: str | None = None, context: str = "") -> list[dict]:
@@ -163,10 +312,17 @@ def _to_sentences(raw: list[dict], start_index: int = 0) -> list[dict]:
     return out
 
 
+def _decode_for_settings(path: str, s: Settings):
+    do_pre = getattr(s, "asr_preprocess", True)
+    hp_hz = getattr(s, "asr_highpass_hz", 80) if do_pre else 0
+    audio = decode_audio(path, highpass_hz=hp_hz) if hp_hz != 80 else decode_audio(path)
+    return preprocess_audio(audio) if do_pre else audio
+
+
 def transcribe(path: str, s: Settings, model: str | None = None) -> tuple[list[dict], dict]:
     """Transkripsi utuh sekali jalan (dipakai untuk unggahan audio dan transkrip akhir)."""
     name = model or s.asr_model
-    audio = decode_audio(path)
+    audio = _decode_for_settings(path, s)
     return _to_sentences(_run(audio, s, model=name)), {"asr_model": name, "duration_s": round(len(audio) / 16000, 1)}
 
 
@@ -228,7 +384,7 @@ def transcribe_incremental(path: str, s: Settings, segments: list[dict], offset:
     baru (di jeda bicara) setelah `offset`; saat `final`, sisa audio diproses sampai habis.
     Mengembalikan (segmen terkunci, offset baru, durasi audio sejauh ini).
     """
-    audio = decode_audio(path)
+    audio = _decode_for_settings(path, s)
     segs, new_offset = incremental_step(audio, s, segments, offset, final)
     return segs, new_offset, len(audio) / 16000
 
