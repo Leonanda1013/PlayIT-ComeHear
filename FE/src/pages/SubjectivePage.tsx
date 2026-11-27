@@ -233,9 +233,11 @@ export function SubjectivePage({ data }: { data: Consultation }) {
 
   async function finishRecording() {
     if (!sessionId.current) throw new Error('Tidak ada audio yang terekam. Coba rekam ulang.')
-    await finishAudioSession(id, sessionId.current)
+    const idempotencyKey = `finish-${id}-${sessionId.current}-${seq.current}`
+    await finishAudioSession(id, sessionId.current, idempotencyKey)
     await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
-    navigate(`/kunjungan/${id}/draf-s`)
+    // Alur non-blocking: langsung arahkan dokter ke Objektif sementara S & ICD-10 disusun di background.
+    navigate(`/kunjungan/${id}/objektif`)
   }
 
   async function retryUpload() {
@@ -329,9 +331,9 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     setBusy(true)
     setError('')
     try {
-      await finishAudioSession(id, interruptedSession.id)
+      await finishAudioSession(id, interruptedSession.id, `finish-${id}-${interruptedSession.id}`)
       await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
-      navigate(`/kunjungan/${id}/draf-s`)
+      navigate(`/kunjungan/${id}/objektif`)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Gagal menyelesaikan sesi rekaman terputus.')
     } finally {
@@ -369,7 +371,7 @@ export function SubjectivePage({ data }: { data: Consultation }) {
     setBusy(true); setError('')
     try {
       await saved()
-      await saveSoap(id, { step: 's', action: 'to_oap', summary, ...Object.fromEntries(subjectiveFields.map(([key]) => [`s_${key}`, fields[key] || ''])) })
+      await saveSoap(id, { step: 's', action: 'to_oap', subjective_source: 'manual', summary, ...Object.fromEntries(subjectiveFields.map(([key]) => [`s_${key}`, fields[key] || ''])) })
       await queryClient.invalidateQueries({ queryKey: ['consultation', id] })
       navigate(`/kunjungan/${id}/objektif`)
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Draf belum tersimpan.') }

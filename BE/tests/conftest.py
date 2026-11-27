@@ -11,7 +11,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 from app.config import Settings
 from app.db import Base, make_engine
 from app.models import ClinicalNote, Location, Patient, Practitioner, User, Visit
+from app.scribe.circuit_breaker import DEFAULT_BREAKER
 from app.seed import seed
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_circuit_breaker():
+    DEFAULT_BREAKER.reset()
+    yield
+    DEFAULT_BREAKER.reset()
 
 
 @pytest.fixture

@@ -1,7 +1,9 @@
-import { ArrowLeft, Pencil } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, LoaderCircle, Pencil, RefreshCw, Sparkles, X } from 'lucide-react'
 import { Link } from 'react-router'
-import { subjectiveStagePath } from '@/lib/clinical'
+import { SCRIBE_S_PROCESSING_STATUSES, subjectiveStagePath } from '@/lib/clinical'
 import { dateId } from '@/lib/format'
+import { useScribeMonitor } from '@/lib/useScribeMonitor'
 import type { Consultation, Patient } from '@/lib/types'
 
 export function PageTitle({ title, back, subtitle, action }: { title: string; back?: string; subtitle?: string; action?: React.ReactNode }) {
@@ -68,6 +70,35 @@ export function stageKey(stage: string) {
 export function ClinicalHeader({ consultation, stage, patientExtra }: { consultation: Consultation; stage: string; patientExtra?: React.ReactNode }) {
   const id = consultation.visit.id
   const active = stageKey(stage)
+  const { scribe, retryBusy, retryError, retry } = useScribeMonitor(consultation)
+  const [dismissedReadyKey, setDismissedReadyKey] = useState<string | null>(null)
+
+  const scribeStatus = scribe.data?.status ?? consultation.session?.status ?? (consultation.failed_session ? 'failed' : null)
+  const sProcessing = Boolean(scribeStatus && (SCRIBE_S_PROCESSING_STATUSES as readonly string[]).includes(scribeStatus))
+  const codingOnly = scribeStatus === 'coding'
+  const sReady = Boolean(scribe.data?.subjective_ready || scribe.data?.extraction || consultation.session?.subjective_ready || consultation.session?.extraction)
+  const manualConflict = Boolean(
+    scribe.data?.manual_conflict ||
+    scribe.data?.applied_to_note === false ||
+    consultation.session?.manual_conflict ||
+    consultation.session?.applied_to_note === false
+  )
+  const isFailed = scribeStatus === 'failed' || (!consultation.session && Boolean(consultation.failed_session))
+  const readyKey = `${consultation.session?.id ?? 0}:${scribe.data?.job_id ?? consultation.session?.job_id ?? ''}:${manualConflict}`
+  const showBanner = stage !== 'subjektif' && stage !== 'draf-s' && !consultation.locked && (
+    sProcessing ||
+    isFailed ||
+    (sReady && dismissedReadyKey !== readyKey)
+  )
+
+  const processingLabel = scribeStatus === 'transcribing'
+    ? 'Mentranskrip percakapan…'
+    : scribeStatus === 'refining'
+      ? 'Menyempurnakan transkrip akhir…'
+      : scribeStatus === 'extracting'
+        ? 'Menyusun draf Subjektif AI…'
+        : 'Menyiapkan pemrosesan AI…'
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -78,11 +109,117 @@ export function ClinicalHeader({ consultation, stage, patientExtra }: { consulta
             const to = item.key === 's'
               ? `/kunjungan/${id}/${subjectiveStagePath(consultation)}`
               : `/kunjungan/${id}/${item.path}`
-            return <Link key={item.key} to={to} aria-current={on ? 'step' : undefined} className={`inline-flex h-8 items-center rounded-full border px-3 text-[11px] font-semibold transition-colors ${on ? 'border-ch-brand bg-ch-brand text-white' : 'border-[#d2e1e7] bg-[#f4f9fb] text-[#5d7285] hover:border-[#8bdbe7]'}`}>{on ? item.long : item.short}</Link>
+            return <Link key={item.key} to={to} aria-current={on ? 'step' : undefined} className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors ${on ? 'border-ch-brand bg-ch-brand text-white' : 'border-[#d2e1e7] bg-[#f4f9fb] text-[#5d7285] hover:border-[#8bdbe7]'}`}>
+              {item.key === 's' && !on && sProcessing && <LoaderCircle className="size-3 animate-spin text-ch-brand" />}
+              {item.key === 's' && !on && !sProcessing && isFailed && <span className="size-2 rounded-full bg-[#e03131]" aria-hidden />}
+              {item.key === 's' && !on && !sProcessing && !isFailed && sReady && <span className="size-2 rounded-full bg-[#198754]" aria-hidden />}
+              {on ? item.long : item.short}
+            </Link>
           })}
         </nav>
       </div>
       <PatientIdentity patient={consultation.visit.patient}>{patientExtra}</PatientIdentity>
+      {showBanner && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`flex flex-wrap items-center justify-between gap-3 rounded-[12px] border px-4 py-2.5 text-xs ${
+            isFailed
+              ? 'border-[#f5c2c7] bg-[#fdf2f2] text-[#8b2020]'
+              : manualConflict
+                ? 'border-[#f0d08a] bg-[#fffaf0] text-[#78350f]'
+                : sReady
+                  ? 'border-[#9fdcc0] bg-[#f0faf4] text-[#145a32]'
+                  : 'border-[#a3dfea] bg-[#edf9fb] text-[#0b6e7d]'
+          }`}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            {sProcessing ? (
+              <LoaderCircle className="size-4 shrink-0 animate-spin text-ch-brand" />
+            ) : isFailed ? (
+              <AlertTriangle className="size-4 shrink-0 text-[#dc3545]" />
+            ) : manualConflict ? (
+              <AlertTriangle className="size-4 shrink-0 text-[#d97706]" />
+            ) : (
+              <CheckCircle2 className="size-4 shrink-0 text-[#198754]" />
+            )}
+            <div className="min-w-0">
+              {sProcessing ? (
+                <p>
+                  <b className="font-semibold">{processingLabel}</b>{' '}
+                  Anda dapat langsung mengisi Objektif/Asesmen; draf Subjektif akan memberi notifikasi saat siap.
+                </p>
+              ) : isFailed ? (
+                <p>
+                  <b className="font-semibold">Pemrosesan AI gagal.</b>{' '}
+                  {retryError || scribe.data?.error || consultation.failed_session?.error || 'Isian Anda tetap tersimpan; coba lagi atau isi Subjektif manual.'}
+                </p>
+              ) : manualConflict ? (
+                <p>
+                  <b className="font-semibold">Draf Subjektif AI selesai</b> — isian manual Anda tetap dipertahankan dan tidak ditimpa.
+                </p>
+              ) : (
+                <p>
+                  <b className="font-semibold">Draf Subjektif AI siap diverifikasi.</b>
+                  {codingOnly && (
+                    <span className="ml-1.5 inline-flex items-center gap-1 text-[#0b6e7d]">
+                      <Sparkles className="size-3" /> Usulan ICD-10 masih disusun di latar belakang…
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {isFailed && (
+              <>
+                <button
+                  type="button"
+                  disabled={retryBusy}
+                  onClick={() => void retry()}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e3a3a8] bg-white px-3 font-semibold text-[#8b2020] hover:bg-[#fff5f5] disabled:opacity-50"
+                >
+                  <RefreshCw className={`size-3.5 ${retryBusy ? 'animate-spin' : ''}`} />
+                  {retryBusy ? 'Mengulang…' : 'Coba Lagi'}
+                </button>
+                <Link
+                  to={`/kunjungan/${id}/draf-s?manual=1`}
+                  className="inline-flex h-8 items-center rounded-[8px] bg-[#bf2e36] px-3 font-semibold text-white hover:bg-[#a5242c]"
+                >
+                  Isi S Manual
+                </Link>
+              </>
+            )}
+            {sProcessing && (
+              <Link
+                to={`/kunjungan/${id}/draf-s`}
+                className="inline-flex h-8 items-center rounded-[8px] border border-[#8edbe6] bg-white px-3 font-semibold text-[#0b6e7d] hover:bg-[#e4f6f9]"
+              >
+                Lihat Proses S
+              </Link>
+            )}
+            {!sProcessing && !isFailed && sReady && (
+              <>
+                <Link
+                  to={`/kunjungan/${id}/draf-s`}
+                  className="inline-flex h-8 items-center rounded-[8px] bg-ch-brand px-3 font-semibold text-white hover:bg-ch-brand-hover"
+                >
+                  {manualConflict ? 'Lihat / Terapkan Draf AI' : 'Tinjau Draf S'}
+                </Link>
+                <button
+                  type="button"
+                  aria-label="Tutup pemberitahuan"
+                  onClick={() => setDismissedReadyKey(readyKey)}
+                  className="grid size-7 place-items-center rounded-md hover:bg-black/5"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

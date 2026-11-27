@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ShieldCheck } from 'lucide-react'
+import { AlertCircle, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { ClinicalHeader } from '@/components/ClinicalHeader'
 import { SoapSummary } from '@/components/SoapSummary'
 import { btn, Notice } from '@/components/ui/kit'
-import { isManualSubjective, saveSoap } from '@/lib/clinical'
+import { isManualSubjective, saveSoap, SCRIBE_ACTIVE_STATUSES } from '@/lib/clinical'
 import { applyFinish, QUEUE_KEY } from '@/lib/queue'
+import { useScribeMonitor } from '@/lib/useScribeMonitor'
 import type { Consultation, QueueResponse } from '@/lib/types'
 
 export function ReviewPage({ data }: { data: Consultation }) {
@@ -18,6 +19,9 @@ export function ReviewPage({ data }: { data: Consultation }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const { scribe } = useScribeMonitor(data)
+  const scribeStatus = scribe.data?.status ?? data.session?.status ?? null
+  const aiStillRunning = Boolean(scribeStatus && (SCRIBE_ACTIVE_STATUSES as readonly string[]).includes(scribeStatus))
   const warnings = [
     !note.subjective_summary?.trim() && !Object.values(note.subjective || {}).some((v) => String(v).trim()) && 'Subjektif masih kosong.',
     !note.diagnoses?.length && 'Diagnosis utama dengan kode ICD-10 belum ditetapkan.',
@@ -48,6 +52,14 @@ export function ReviewPage({ data }: { data: Consultation }) {
     <ClinicalHeader consultation={data} stage="verifikasi" />
     {error && <Notice tone="bad">{error} Draf tetap tersimpan; perbaiki isian lalu coba lagi.</Notice>}
     {notice && <Notice>{notice}</Notice>}
+    {aiStillRunning && (
+      <Notice tone="info">
+        <span className="inline-flex items-center gap-2">
+          <LoaderCircle className="size-4 shrink-0 animate-spin text-ch-brand" />
+          Proses AI Scribe masih berjalan di latar belakang. Pastikan bagian Subjektif sudah sesuai sebelum melakukan validasi akhir.
+        </span>
+      </Notice>
+    )}
     {warnings.length > 0 && <div role="alert" className="rounded-[12px] border border-[#f0d08a] bg-ch-warn-soft p-4 text-sm text-[#6b4f00]"><p className="flex items-center gap-2 font-semibold"><AlertCircle className="size-4" /> Lengkapi sebelum validasi</p><ul className="mt-2 list-inside list-disc text-[13px]">{warnings.map((item) => <li key={item}>{item}</li>)}</ul></div>}
 
     <SoapSummary note={note} editBase={`/kunjungan/${id}`} aiDraft={!isManualSubjective(data)} />

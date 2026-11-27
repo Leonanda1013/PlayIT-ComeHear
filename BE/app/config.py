@@ -61,9 +61,18 @@ class Settings(BaseSettings):
     llm_providers: str = "claude"
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-5-5"
-    claude_max_tokens: int = Field(default=8192, ge=1, le=65536)
+    claude_models: str = "claude-sonnet-5-5,claude-haiku-5-5"
+    claude_max_tokens: int = Field(default=4096, ge=1, le=65536)
+    claude_prompt_cache: bool = True
+    claude_prompt_cache_min_chars: int = Field(default=1024, ge=0, le=100000)
+    claude_thinking_disabled: bool = False
+    claude_effort: str = ""
     llm_timeout_s: float = Field(default=45.0, gt=0, le=300)
+    llm_total_timeout_s: float = Field(default=75.0, gt=0, le=600)
     llm_max_retries: int = Field(default=1, ge=0, le=2)
+    llm_cb_failure_threshold: int = Field(default=2, ge=1, le=10)
+    llm_cb_cooldown_s: float = Field(default=60.0, ge=0, le=600)
+    llm_retry_after_max_s: float = Field(default=5.0, ge=0, le=60)
     # Kontrak konfigurasi adapter OpenAI milik Kemal. Registry memuatnya secara lazy.
     openai_api_key: str = ""
     openai_model: str = ""
@@ -77,6 +86,15 @@ class Settings(BaseSettings):
     @property
     def provider_list(self) -> list[str]:
         return [p.strip() for p in self.llm_providers.split(",") if p.strip()]
+
+    @property
+    def claude_model_list(self) -> list[str]:
+        if "claude_models" in self.model_fields_set:
+            return list(dict.fromkeys(m.strip() for m in self.claude_models.split(",") if m.strip()))
+        if "claude_model" in self.model_fields_set:
+            model = self.claude_model.strip()
+            return [model] if model else []
+        return list(dict.fromkeys(m.strip() for m in self.claude_models.split(",") if m.strip()))
 
     @property
     def final_asr_model(self) -> str:
