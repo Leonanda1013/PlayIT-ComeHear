@@ -137,10 +137,6 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
     }
     call.mutate(announcement)
   }
-  const seed = useMutation({
-    mutationFn: () => apiRequest('/api/backend/pendaftaran/demo', { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
-  })
   const expired = queue.error instanceof ApiError && queue.error.status === 401
   useEffect(() => { if (expired) onSessionExpired() }, [expired, onSessionExpired])
 
@@ -186,7 +182,7 @@ export function VisitsPage({ user, onLogout, onSessionExpired }: SessionProps) {
             <div className={`${grid} h-[39px] rounded-[10px] bg-[#e8eff2] px-4 text-[12px] font-semibold text-[#3f5468]`}><span>No</span><span>Status</span><span>Nama Pasien</span><span>Draft SOAP</span><span className="text-center">Aksi</span></div>
             {queue.isPending ? <LoadingState label="Memuat antrean…" />
               : queue.isError ? <div className="mt-4"><ErrorState message={queue.error.message} onRetry={() => queue.refetch()} /></div>
-              : rows.length === 0 ? <EmptyState title={q ? 'Pasien tidak ditemukan' : all.length ? 'Tidak ada pasien di tab ini' : 'Belum ada antrean hari ini'} description={q ? 'Periksa ejaan nama atau nomor RM.' : all.length ? 'Pilih tab lain untuk melihat pasien.' : 'Kunjungan yang dikonfirmasi petugas rekam medis akan muncul di sini.'} action={!all.length ? <button type="button" onClick={() => seed.mutate()} disabled={seed.isPending} className="inline-flex h-10 items-center rounded-[10px] bg-ch-brand px-4 text-sm font-semibold text-white hover:bg-ch-brand-hover">Isi antrean demo</button> : undefined} />
+              : rows.length === 0 ? <EmptyState title={q ? 'Pasien tidak ditemukan' : all.length ? 'Tidak ada pasien di tab ini' : 'Belum ada antrean hari ini'} description={q ? 'Periksa ejaan nama atau nomor RM.' : all.length ? 'Pilih tab lain untuk melihat pasien.' : 'Kunjungan yang dikonfirmasi petugas rekam medis akan muncul di sini.'} />
               : <div className="mt-4 border-b border-[#dfe8ec]">{rows.map((visit, i) => (
                 <QueueRow key={visit.id} visit={visit} hideTopLine={i === 0 || rows[i - 1]?.state === 'saat_ini'}
                   isCalling={callingId === visit.id} callDisabled={callingId !== visit.id && (callingId !== null || call.isPending)}
